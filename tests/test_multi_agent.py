@@ -849,6 +849,39 @@ class TestDecisionAgentChatMode(unittest.TestCase):
         self.assertEqual(opinion.signal, "buy")
 
 
+class TestTechnicalAgentSkillPolicy(unittest.TestCase):
+    """TechnicalAgent should only receive the legacy trend baseline for implicit/default runs."""
+
+    def test_prompt_omits_legacy_default_policy_when_explicit_skill_selected(self):
+        from src.agent.agents.technical_agent import TechnicalAgent
+
+        agent = TechnicalAgent(
+            tool_registry=MagicMock(),
+            llm_adapter=MagicMock(),
+            skill_instructions="### 技能 1: 缠论",
+            technical_skill_policy="",
+        )
+        prompt = agent.system_prompt(AgentContext(query="分析 600519", stock_code="600519"))
+
+        self.assertNotIn("Bias from MA5 < 2%", prompt)
+        self.assertIn("### 技能 1: 缠论", prompt)
+
+    def test_prompt_includes_legacy_default_policy_for_implicit_default_run(self):
+        from src.agent.agents.technical_agent import TechnicalAgent
+        from src.agent.skills.defaults import TECHNICAL_SKILL_RULES_EN
+
+        agent = TechnicalAgent(
+            tool_registry=MagicMock(),
+            llm_adapter=MagicMock(),
+            skill_instructions="### 技能 1: 默认多头趋势",
+            technical_skill_policy=TECHNICAL_SKILL_RULES_EN,
+        )
+        prompt = agent.system_prompt(AgentContext(query="分析 600519", stock_code="600519"))
+
+        self.assertIn("Bias from MA5 < 2%", prompt)
+        self.assertIn("### 技能 1: 默认多头趋势", prompt)
+
+
 class TestBaseAgentMessageAssembly(unittest.TestCase):
     """Test BaseAgent message assembly helpers."""
 

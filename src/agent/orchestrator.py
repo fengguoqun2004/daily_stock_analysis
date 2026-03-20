@@ -82,6 +82,7 @@ class AgentOrchestrator:
         tool_registry: ToolRegistry,
         llm_adapter: LLMToolAdapter,
         skill_instructions: str = "",
+        technical_skill_policy: str = "",
         max_steps: int = 10,
         mode: str = "standard",
         skill_manager=None,
@@ -90,6 +91,7 @@ class AgentOrchestrator:
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
         self.skill_instructions = skill_instructions
+        self.technical_skill_policy = technical_skill_policy
         self.max_steps = max_steps
         normalized_mode = "specialist" if mode in {"strategy", "skill"} else mode
         self.mode = normalized_mode if normalized_mode in VALID_MODES else "standard"
@@ -472,6 +474,7 @@ class AgentOrchestrator:
             tool_registry=self.tool_registry,
             llm_adapter=self.llm_adapter,
             skill_instructions=self.skill_instructions,
+            technical_skill_policy=self.technical_skill_policy,
         )
 
         technical = self._prepare_agent(TechnicalAgent(**common_kwargs))
@@ -504,6 +507,7 @@ class AgentOrchestrator:
                 tool_registry=self.tool_registry,
                 llm_adapter=self.llm_adapter,
                 skill_instructions=self.skill_instructions,
+                technical_skill_policy=self.technical_skill_policy,
             )
             router = SkillRouter()
             selected = router.select_skills(ctx)

@@ -131,33 +131,51 @@ def build_agent_executor(config=None, skills: Optional[List[str]] = None):
     arch = getattr(config, "agent_arch", "single")
 
     from src.agent.llm_adapter import LLMToolAdapter
-    from src.agent.skills.defaults import get_default_active_skill_ids
+    from src.agent.skills.defaults import (
+        get_default_active_skill_ids,
+        get_default_technical_skill_policy,
+        get_default_trading_skill_policy,
+    )
 
     registry = get_tool_registry()
     skill_manager = get_skill_manager(config)
 
     configured_skills = getattr(config, "agent_skills", None) or None
+    explicit_skill_selection = skills is not None or configured_skills is not None
     default_skills = get_default_active_skill_ids(skill_manager.list_skills())
     skills_to_activate = skills if skills is not None else (configured_skills or default_skills)
     skill_manager.activate(skills_to_activate if skills_to_activate else ["all"])
     logger.info("[AgentFactory] Activated skills: %s (arch=%s)", skills_to_activate, arch)
 
     llm_adapter = LLMToolAdapter(config)
+    default_skill_policy = get_default_trading_skill_policy(
+        explicit_skill_selection=explicit_skill_selection,
+    )
+    technical_skill_policy = get_default_technical_skill_policy(
+        explicit_skill_selection=explicit_skill_selection,
+    )
 
     if arch == "multi":
-        return _build_orchestrator(config, registry, llm_adapter, skill_manager)
+        return _build_orchestrator(
+            config,
+            registry,
+            llm_adapter,
+            skill_manager,
+            technical_skill_policy=technical_skill_policy,
+        )
 
     from src.agent.executor import AgentExecutor
     return AgentExecutor(
         tool_registry=registry,
         llm_adapter=llm_adapter,
         skill_instructions=skill_manager.get_skill_instructions(),
+        default_skill_policy=default_skill_policy,
         max_steps=getattr(config, "agent_max_steps", 10),
         timeout_seconds=getattr(config, "agent_orchestrator_timeout_s", 0),
     )
 
 
-def _build_orchestrator(config, registry, llm_adapter, skill_manager):
+def _build_orchestrator(config, registry, llm_adapter, skill_manager, *, technical_skill_policy: str = ""):
     """Build and return an :class:`AgentOrchestrator` (multi-agent mode).
 
     The orchestrator presents the same ``run()`` / ``chat()`` interface as
@@ -172,6 +190,7 @@ def _build_orchestrator(config, registry, llm_adapter, skill_manager):
         tool_registry=registry,
         llm_adapter=llm_adapter,
         skill_instructions=skill_manager.get_skill_instructions(),
+        technical_skill_policy=technical_skill_policy,
         max_steps=getattr(config, "agent_max_steps", 10),
         mode=mode,
         skill_manager=skill_manager,

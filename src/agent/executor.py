@@ -21,7 +21,6 @@ from typing import Any, Callable, Dict, List, Optional
 
 from src.agent.llm_adapter import LLMToolAdapter
 from src.agent.runner import run_agent_loop, parse_dashboard_json
-from src.agent.skills.defaults import CORE_TRADING_SKILL_POLICY_ZH
 from src.agent.tools.registry import ToolRegistry
 from src.report_language import normalize_report_language
 
@@ -68,7 +67,7 @@ AGENT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 
 **第四阶段 · 生成报告**（所有数据就绪后，输出完整决策仪表盘 JSON）
 
 > ⚠️ 每阶段的工具调用必须完整返回结果后，才能进入下一阶段。禁止将不同阶段的工具合并到同一次调用中。
-""" + CORE_TRADING_SKILL_POLICY_ZH + """
+{default_skill_policy_section}
 
 ## 规则
 
@@ -200,7 +199,7 @@ CHAT_SYSTEM_PROMPT = """你是一位专注于趋势交易的 A 股投资分析 A
 - 基于上述真实数据，结合激活技能进行综合研判，输出投资建议
 
 > ⚠️ 禁止将不同阶段的工具合并到同一次调用中（例如禁止在第一次调用中同时请求行情、技术指标和新闻）。
-""" + CORE_TRADING_SKILL_POLICY_ZH + """
+{default_skill_policy_section}
 
 ## 规则
 
@@ -270,12 +269,14 @@ class AgentExecutor:
         tool_registry: ToolRegistry,
         llm_adapter: LLMToolAdapter,
         skill_instructions: str = "",
+        default_skill_policy: str = "",
         max_steps: int = 10,
         timeout_seconds: Optional[float] = None,
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
         self.skill_instructions = skill_instructions
+        self.default_skill_policy = default_skill_policy
         self.max_steps = max_steps
         self.timeout_seconds = timeout_seconds
 
@@ -293,8 +294,12 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易技能\n\n{self.skill_instructions}"
+        default_skill_policy_section = ""
+        if self.default_skill_policy:
+            default_skill_policy_section = f"\n{self.default_skill_policy}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         system_prompt = AGENT_SYSTEM_PROMPT.format(
+            default_skill_policy_section=default_skill_policy_section,
             skills_section=skills_section,
             language_section=_build_language_section(report_language),
         )
@@ -328,8 +333,12 @@ class AgentExecutor:
         skills_section = ""
         if self.skill_instructions:
             skills_section = f"## 激活的交易技能\n\n{self.skill_instructions}"
+        default_skill_policy_section = ""
+        if self.default_skill_policy:
+            default_skill_policy_section = f"\n{self.default_skill_policy}\n"
         report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         system_prompt = CHAT_SYSTEM_PROMPT.format(
+            default_skill_policy_section=default_skill_policy_section,
             skills_section=skills_section,
             language_section=_build_language_section(report_language, chat_mode=True),
         )

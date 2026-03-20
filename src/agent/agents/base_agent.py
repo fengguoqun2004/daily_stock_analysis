@@ -49,10 +49,12 @@ class BaseAgent(ABC):
         tool_registry: ToolRegistry,
         llm_adapter: LLMToolAdapter,
         skill_instructions: str = "",
+        technical_skill_policy: str = "",
     ):
         self.tool_registry = tool_registry
         self.llm_adapter = llm_adapter
         self.skill_instructions = skill_instructions
+        self.technical_skill_policy = technical_skill_policy
         self.memory = AgentMemory.from_config()
 
     # -----------------------------------------------------------------

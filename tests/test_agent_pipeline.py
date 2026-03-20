@@ -14,6 +14,7 @@ import unittest
 import sys
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
@@ -91,6 +92,130 @@ class TestAgentConfig(unittest.TestCase):
         config = Config._load_from_env()
         self.assertEqual(config.agent_litellm_model, 'openai/gpt-4o-mini')
         self.assertTrue(config.is_agent_available())
+
+
+class TestAgentFactorySkillBaseline(unittest.TestCase):
+    """Ensure explicit skill selection does not silently re-apply the default bull-trend baseline."""
+
+    @staticmethod
+    def _make_skill(name: str, *, default_active: bool = False, default_priority: int = 100):
+        return SimpleNamespace(
+            name=name,
+            display_name=name,
+            description=f"{name} desc",
+            instructions=f"{name} instructions",
+            default_active=default_active,
+            default_router=default_active,
+            default_priority=default_priority,
+            user_invocable=True,
+        )
+
+    @patch('src.agent.executor.AgentExecutor')
+    @patch('src.agent.llm_adapter.LLMToolAdapter')
+    @patch('src.agent.factory.get_skill_manager')
+    @patch('src.agent.factory.get_tool_registry')
+    def test_explicit_request_disables_default_skill_policy(
+        self,
+        mock_get_tool_registry,
+        mock_get_skill_manager,
+        _mock_llm_adapter,
+        mock_executor_cls,
+    ):
+        from src.agent.factory import build_agent_executor
+
+        skill_manager = MagicMock()
+        skill_manager.list_skills.return_value = [
+            self._make_skill("bull_trend", default_active=True, default_priority=10),
+            self._make_skill("chan_theory", default_priority=20),
+        ]
+        skill_manager.get_skill_instructions.return_value = "chan_theory instructions"
+        mock_get_skill_manager.return_value = skill_manager
+        mock_get_tool_registry.return_value = MagicMock()
+        mock_executor_cls.return_value = MagicMock()
+
+        config = SimpleNamespace(
+            agent_arch="single",
+            agent_skills=[],
+            agent_max_steps=10,
+            agent_orchestrator_timeout_s=600,
+        )
+
+        build_agent_executor(config, skills=["chan_theory"])
+
+        kwargs = mock_executor_cls.call_args.kwargs
+        self.assertEqual(kwargs["default_skill_policy"], "")
+        skill_manager.activate.assert_called_once_with(["chan_theory"])
+
+    @patch('src.agent.executor.AgentExecutor')
+    @patch('src.agent.llm_adapter.LLMToolAdapter')
+    @patch('src.agent.factory.get_skill_manager')
+    @patch('src.agent.factory.get_tool_registry')
+    def test_configured_skills_disable_default_skill_policy(
+        self,
+        mock_get_tool_registry,
+        mock_get_skill_manager,
+        _mock_llm_adapter,
+        mock_executor_cls,
+    ):
+        from src.agent.factory import build_agent_executor
+
+        skill_manager = MagicMock()
+        skill_manager.list_skills.return_value = [
+            self._make_skill("bull_trend", default_active=True, default_priority=10),
+            self._make_skill("wave_theory", default_priority=20),
+        ]
+        skill_manager.get_skill_instructions.return_value = "wave_theory instructions"
+        mock_get_skill_manager.return_value = skill_manager
+        mock_get_tool_registry.return_value = MagicMock()
+        mock_executor_cls.return_value = MagicMock()
+
+        config = SimpleNamespace(
+            agent_arch="single",
+            agent_skills=["wave_theory"],
+            agent_max_steps=10,
+            agent_orchestrator_timeout_s=600,
+        )
+
+        build_agent_executor(config)
+
+        kwargs = mock_executor_cls.call_args.kwargs
+        self.assertEqual(kwargs["default_skill_policy"], "")
+        skill_manager.activate.assert_called_once_with(["wave_theory"])
+
+    @patch('src.agent.executor.AgentExecutor')
+    @patch('src.agent.llm_adapter.LLMToolAdapter')
+    @patch('src.agent.factory.get_skill_manager')
+    @patch('src.agent.factory.get_tool_registry')
+    def test_implicit_default_run_keeps_default_skill_policy(
+        self,
+        mock_get_tool_registry,
+        mock_get_skill_manager,
+        _mock_llm_adapter,
+        mock_executor_cls,
+    ):
+        from src.agent.factory import build_agent_executor
+
+        skill_manager = MagicMock()
+        skill_manager.list_skills.return_value = [
+            self._make_skill("bull_trend", default_active=True, default_priority=10),
+        ]
+        skill_manager.get_skill_instructions.return_value = "bull_trend instructions"
+        mock_get_skill_manager.return_value = skill_manager
+        mock_get_tool_registry.return_value = MagicMock()
+        mock_executor_cls.return_value = MagicMock()
+
+        config = SimpleNamespace(
+            agent_arch="single",
+            agent_skills=[],
+            agent_max_steps=10,
+            agent_orchestrator_timeout_s=600,
+        )
+
+        build_agent_executor(config)
+
+        kwargs = mock_executor_cls.call_args.kwargs
+        self.assertIn("严进策略", kwargs["default_skill_policy"])
+        skill_manager.activate.assert_called_once_with(["bull_trend"])
 
 
 # ============================================================

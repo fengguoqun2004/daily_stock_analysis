@@ -16,7 +16,6 @@ from typing import Optional
 from src.agent.agents.base_agent import BaseAgent
 from src.agent.protocols import AgentContext, AgentOpinion
 from src.agent.runner import try_parse_json
-from src.agent.skills.defaults import TECHNICAL_SKILL_RULES_EN
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,9 @@ class TechnicalAgent(BaseAgent):
         skills = ""
         if self.skill_instructions:
             skills = f"\n## Active Trading Skills\n\n{self.skill_instructions}\n"
+        baseline = ""
+        if self.technical_skill_policy:
+            baseline = f"\n{self.technical_skill_policy}\n"
 
         return f"""\
 You are a **Technical Analysis Agent** specialising in Chinese A-shares, \
@@ -53,7 +55,7 @@ output a structured JSON opinion.
 3. Analyse volume and chip distribution
 4. Identify chart patterns
 
-{TECHNICAL_SKILL_RULES_EN}
+{baseline}
 {skills}
 ## Output Format
 Return **only** a JSON object (no markdown fences):
@@ -98,5 +100,4 @@ Return **only** a JSON object (no markdown fences):
             },
             raw_data=parsed,
         )
-
 

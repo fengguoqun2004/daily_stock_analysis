@@ -70,6 +70,25 @@ following default risk controls as the shared baseline:
 """
 
 
+def get_default_trading_skill_policy(*, explicit_skill_selection: bool) -> str:
+    """Return the legacy default trading baseline only for implicit/default runs.
+
+    When a caller explicitly chooses a skill (via request payload or config),
+    analysis should follow that selected skill alone instead of silently
+    layering the old bull-trend baseline on top.
+    """
+    if explicit_skill_selection:
+        return ""
+    return CORE_TRADING_SKILL_POLICY_ZH
+
+
+def get_default_technical_skill_policy(*, explicit_skill_selection: bool) -> str:
+    """Return the technical-agent baseline only for implicit/default runs."""
+    if explicit_skill_selection:
+        return ""
+    return TECHNICAL_SKILL_RULES_EN
+
+
 @lru_cache(maxsize=1)
 def _load_builtin_skill_catalog() -> tuple[object, ...]:
     try:
