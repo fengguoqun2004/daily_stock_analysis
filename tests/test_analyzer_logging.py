@@ -127,11 +127,12 @@ def test_analyze_does_not_log_prompt_or_response_preview_by_default(caplog, monk
 def test_analyze_logs_only_redacted_single_line_preview_in_debug_mode(caplog, monkeypatch):
     long_tail = "超长调试内容" * 80
     prompt = (
-        "Authorization: Bearer raw-secret-token\n"
+        '{"authorization":"Bearer raw-secret-token"}\n'
         f"api_key=sk-live-123456 password=秘密 你好 notes={long_tail}\n"
         f"{long_tail}"
     )
     response_text = (
+        '{"cookie":"csrftoken=xyz;foo=bar"}\n'
         "email=user@example.com\n"
         f"session_id=abc [] password=open sesame notes={long_tail}\n"
         f"{long_tail}"
@@ -152,15 +153,17 @@ def test_analyze_logs_only_redacted_single_line_preview_in_debug_mode(caplog, mo
 
     assert "\n" not in prompt_preview
     assert "\n" not in response_preview
-    assert "Authorization=Bearer [REDACTED]" in prompt_preview
+    assert '{"authorization":"Bearer [REDACTED]"}' in prompt_preview
     assert "api_key=[REDACTED]" in prompt_preview
     assert "password=[REDACTED]" in prompt_preview
     assert "notes=" in prompt_preview
+    assert '{"cookie":"[REDACTED]"}' in response_preview
     assert "[REDACTED_EMAIL]" in response_preview
     assert "session_id=[REDACTED]" in response_preview
     assert "password=[REDACTED]" in response_preview
     assert "notes=" in response_preview
     assert "raw-secret-token" not in caplog.text
+    assert "csrftoken=xyz;foo=bar" not in caplog.text
     assert "sk-live-123456" not in caplog.text
     assert "秘密 你好" not in caplog.text
     assert "user@example.com" not in caplog.text
@@ -233,6 +236,35 @@ def test_sanitize_llm_log_preview_redacts_authorization_headers(raw_preview, exp
 
     assert preview == expected_preview
     assert raw_preview.split()[-1] not in preview
+
+
+@pytest.mark.parametrize(
+    ("raw_preview", "expected_preview"),
+    [
+        ('{"authorization":"Bearer raw-secret-token"}', '{"authorization":"Bearer [REDACTED]"}'),
+        ("{'authorization':'Basic dXNlcjpwYXNz'}", "{'authorization':'Basic [REDACTED]'}"),
+    ],
+)
+def test_sanitize_llm_log_preview_redacts_quoted_authorization_headers(raw_preview, expected_preview):
+    preview = _sanitize_llm_log_preview(raw_preview)
+
+    assert preview == expected_preview
+    assert "raw-secret-token" not in preview
+    assert "dXNlcjpwYXNz" not in preview
+
+
+@pytest.mark.parametrize(
+    ("raw_preview", "expected_preview"),
+    [
+        ('{"cookie":"csrftoken=xyz;foo=bar"}', '{"cookie":"[REDACTED]"}'),
+        ("{'cookie':'csrftoken=xyz;foo=bar'}", "{'cookie':'[REDACTED]'}"),
+    ],
+)
+def test_sanitize_llm_log_preview_redacts_quoted_cookie_headers(raw_preview, expected_preview):
+    preview = _sanitize_llm_log_preview(raw_preview)
+
+    assert preview == expected_preview
+    assert "csrftoken=xyz;foo=bar" not in preview
 
 
 @pytest.mark.parametrize(

@@ -53,8 +53,16 @@ logger = logging.getLogger(__name__)
 _LLM_PREVIEW_MAX_CHARS = 240
 _LLM_SENSITIVE_PATTERNS = (
     (
+        re.compile(r'(?i)(["\'])(authorization)\1\s*([:=])\s*(["\'])(bearer|basic)\s+(?:\\.|(?!\4).)*\4'),
+        r"\1\2\1\3\4\5 [REDACTED]\4",
+    ),
+    (
         re.compile(r"(?i)\b(authorization)\s*[:=]\s*(bearer|basic)\s+\S+"),
         r"\1=\2 [REDACTED]",
+    ),
+    (
+        re.compile(r'(?i)(["\'])(cookie)\1\s*([:=])\s*(["\'])(?:\\.|(?!\4).)*\4'),
+        r"\1\2\1\3\4[REDACTED]\4",
     ),
     (
         re.compile(r"(?i)\b(cookie)\s*[:=]\s*[^;\s]+(?:;[^\n\r]*)?"),
