@@ -223,10 +223,13 @@ class BacktestService:
         analysis_date_from: Optional[date] = None,
         analysis_date_to: Optional[date] = None,
     ) -> Dict[str, Any]:
+        config = get_config()
+        engine_version = str(getattr(config, "backtest_engine_version", "v1"))
         offset = max(page - 1, 0) * limit
         rows, total = self.repo.get_results_paginated(
             code=code,
             eval_window_days=eval_window_days,
+            engine_version=engine_version,
             analysis_date_from=analysis_date_from,
             analysis_date_to=analysis_date_to,
             days=None,

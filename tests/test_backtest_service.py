@@ -378,6 +378,18 @@ class BacktestServiceTestCase(unittest.TestCase):
         )
         self.assertEqual(len(rows), 1)
 
+        evaluations = service.get_recent_evaluations(
+            code="600519",
+            eval_window_days=3,
+            limit=10,
+            page=1,
+            analysis_date_from=date(2024, 1, 1),
+            analysis_date_to=date(2024, 1, 1),
+        )
+        self.assertEqual(evaluations["total"], 1)
+        self.assertEqual(len(evaluations["items"]), 1)
+        self.assertEqual(evaluations["items"][0]["engine_version"], "v1")
+
         summary = service.get_summary(
             scope="stock",
             code="600519",
