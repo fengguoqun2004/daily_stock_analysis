@@ -13,7 +13,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Optional
+from typing import List, Optional
 
 from src.config import get_config
 from src.notification import NotificationService
@@ -23,6 +23,18 @@ from src.analyzer import GeminiAnalyzer
 
 
 logger = logging.getLogger(__name__)
+
+
+def _prepend_runtime_notes(report: Optional[str], notes: List[str]) -> Optional[str]:
+    """Attach soft-timeout downgrade notes to the market review output."""
+    if not notes:
+        return report
+    notice_lines = ["> ⚠️ 本次大盘复盘为预算降级后的部分结果。"]
+    notice_lines.extend(f"> {note}" for note in notes)
+    notice_block = "\n".join(notice_lines)
+    if report:
+        return f"{notice_block}\n\n{report}"
+    return notice_block
 
 
 def run_market_review(
@@ -60,6 +72,7 @@ def run_market_review(
     )
     if region not in ('cn', 'us', 'both'):
         region = 'cn'
+    runtime_notes: List[str] = []
 
     def _remaining_budget_seconds() -> Optional[float]:
         if soft_timeout_deadline is None:
@@ -81,9 +94,11 @@ def run_market_review(
 
     try:
         if not _has_budget('大盘复盘'):
-            return None
-
-        if region == 'both':
+            review_report = _prepend_runtime_notes(
+                None,
+                ["已跳过大盘复盘：剩余预算不足。"],
+            )
+        elif region == 'both':
             # 顺序执行 A 股 + 美股，合并报告
             cn_analyzer = MarketAnalyzer(
                 search_service=search_service, analyzer=analyzer, region='cn'
@@ -98,6 +113,7 @@ def run_market_review(
                 logger.info("生成美股大盘复盘报告...")
                 us_report = us_analyzer.run_daily_review()
             else:
+                runtime_notes.append("已跳过美股大盘复盘：剩余预算不足。")
                 logger.info("已保留 A 股复盘结果，跳过美股复盘。")
             review_report = ''
             if cn_report:
@@ -106,8 +122,7 @@ def run_market_review(
                 if review_report:
                     review_report += "\n\n---\n\n> 以下为美股大盘复盘\n\n"
                 review_report += f"# 美股大盘复盘\n\n{us_report}"
-            if not review_report:
-                review_report = None
+            review_report = _prepend_runtime_notes(review_report or None, runtime_notes)
         else:
             market_analyzer = MarketAnalyzer(
                 search_service=search_service,
@@ -115,7 +130,7 @@ def run_market_review(
                 region=region,
             )
             review_report = market_analyzer.run_daily_review()
-        
+
         if review_report:
             # 保存报告到文件
             date_str = datetime.now().strftime('%Y%m%d')

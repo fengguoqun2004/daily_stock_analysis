@@ -303,6 +303,18 @@ def _has_daily_run_budget_for_stage(
     return True
 
 
+def _generate_pipeline_aggregate_report(
+    pipeline: StockAnalysisPipeline,
+    results: List,
+    report_type: str,
+) -> str:
+    """Reuse pipeline-level report notices when available."""
+    generator = getattr(pipeline, "render_aggregate_report", None)
+    if callable(generator):
+        return generator(results, report_type)
+    return pipeline.notifier.generate_aggregate_report(results, report_type)
+
+
 def run_full_analysis(
     config: Config,
     args: argparse.Namespace,
@@ -402,24 +414,19 @@ def run_full_analysis(
             and not args.no_market_review
             and effective_region != ''
         ):
-            if _has_daily_run_budget_for_stage(
-                run_deadline,
-                run_budget_grace_seconds,
-                stage_name='大盘复盘',
-            ):
-                review_result = run_market_review(
-                    notifier=pipeline.notifier,
-                    analyzer=pipeline.analyzer,
-                    search_service=pipeline.search_service,
-                    send_notification=not args.no_notify,
-                    merge_notification=merge_notification,
-                    override_region=effective_region,
-                    soft_timeout_deadline=run_deadline,
-                    soft_timeout_grace_seconds=run_budget_grace_seconds,
-                )
-                # 如果有结果，赋值给 market_report 用于后续飞书文档生成
-                if review_result:
-                    market_report = review_result
+            review_result = run_market_review(
+                notifier=pipeline.notifier,
+                analyzer=pipeline.analyzer,
+                search_service=pipeline.search_service,
+                send_notification=not args.no_notify,
+                merge_notification=merge_notification,
+                override_region=effective_region,
+                soft_timeout_deadline=run_deadline,
+                soft_timeout_grace_seconds=run_budget_grace_seconds,
+            )
+            # 如果有结果，赋值给 market_report 用于后续飞书文档生成
+            if review_result:
+                market_report = review_result
 
         # Issue #190: 合并推送（个股+大盘复盘）
         if merge_notification and (results or market_report) and not args.no_notify:
@@ -427,7 +434,8 @@ def run_full_analysis(
             if market_report:
                 parts.append(f"# 📈 大盘复盘\n\n{market_report}")
             if results:
-                dashboard_content = pipeline.notifier.generate_aggregate_report(
+                dashboard_content = _generate_pipeline_aggregate_report(
+                    pipeline,
                     results,
                     getattr(config, 'report_type', 'simple'),
                 )
@@ -474,7 +482,8 @@ def run_full_analysis(
 
                 # 添加个股决策仪表盘（使用 NotificationService 生成，按 report_type 分支）
                 if results:
-                    dashboard_content = pipeline.notifier.generate_aggregate_report(
+                    dashboard_content = _generate_pipeline_aggregate_report(
+                        pipeline,
                         results,
                         getattr(config, 'report_type', 'simple'),
                     )
@@ -737,20 +746,15 @@ def main() -> int:
                 logger.warning("未检测到 API Key (Gemini/OpenAI)，将仅使用模板生成报告")
 
             run_deadline, run_budget_grace_seconds = _resolve_daily_run_budget(config)
-            if _has_daily_run_budget_for_stage(
-                run_deadline,
-                run_budget_grace_seconds,
-                stage_name='大盘复盘',
-            ):
-                run_market_review(
-                    notifier=notifier,
-                    analyzer=analyzer,
-                    search_service=search_service,
-                    send_notification=not args.no_notify,
-                    override_region=effective_region,
-                    soft_timeout_deadline=run_deadline,
-                    soft_timeout_grace_seconds=run_budget_grace_seconds,
-                )
+            run_market_review(
+                notifier=notifier,
+                analyzer=analyzer,
+                search_service=search_service,
+                send_notification=not args.no_notify,
+                override_region=effective_region,
+                soft_timeout_deadline=run_deadline,
+                soft_timeout_grace_seconds=run_budget_grace_seconds,
+            )
             return 0
 
         # 模式2: 定时任务模式

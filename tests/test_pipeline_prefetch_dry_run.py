@@ -18,6 +18,14 @@ ensure_litellm_stub()
 from src.core.pipeline import StockAnalysisPipeline
 
 
+class _FakeNotifier:
+    def __init__(self):
+        self.generate_dashboard_report = MagicMock(
+            side_effect=lambda results: "report:" + ",".join(r.code for r in results)
+        )
+        self.save_report_to_file = MagicMock(return_value="/tmp/report.md")
+
+
 class TestPipelinePrefetchBehavior(unittest.TestCase):
     @staticmethod
     def _build_pipeline(process_result):
@@ -75,6 +83,94 @@ class TestPipelinePrefetchBehavior(unittest.TestCase):
 
         self.assertEqual([result.code for result in results], ["000001"])
         self.assertEqual(pipeline.process_single_stock.call_count, 1)
+
+    def test_run_refills_queue_before_delay_and_skips_final_sleep(self):
+        class _FakeFuture:
+            def __init__(self, result):
+                self._result = result
+
+            def result(self):
+                return self._result
+
+        class _FakeExecutor:
+            instances = []
+
+            def __init__(self, max_workers):
+                self.max_workers = max_workers
+                self.futures = []
+                _FakeExecutor.instances.append(self)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def submit(self, fn, *args, **kwargs):
+                future = _FakeFuture(fn(*args, **kwargs))
+                self.futures.append(future)
+                return future
+
+        pipeline = self._build_pipeline(process_result=None)
+        pipeline.max_workers = 2
+        pipeline.process_single_stock = MagicMock(
+            side_effect=lambda code, **_: SimpleNamespace(code=code)
+        )
+        pipeline.config.analysis_delay = 3
+
+        sleep_call_counts = []
+
+        def _fake_as_completed(futures):
+            return iter([next(iter(futures))])
+
+        with patch("src.core.pipeline.ThreadPoolExecutor", _FakeExecutor), \
+             patch("src.core.pipeline.as_completed", side_effect=_fake_as_completed), \
+             patch(
+                 "src.core.pipeline.time.sleep",
+                 side_effect=lambda _seconds: sleep_call_counts.append(
+                     pipeline.process_single_stock.call_count
+                 ),
+             ):
+            results = pipeline.run(
+                stock_codes=["000001", "000002", "000003"],
+                dry_run=False,
+                send_notification=False,
+            )
+
+        self.assertEqual([result.code for result in results], ["000001", "000002", "000003"])
+        self.assertEqual(sleep_call_counts, [3])
+
+    def test_run_includes_skipped_stock_list_in_saved_report(self):
+        pipeline = StockAnalysisPipeline.__new__(StockAnalysisPipeline)
+        pipeline.max_workers = 1
+        pipeline.fetcher_manager = MagicMock()
+        pipeline.db = MagicMock()
+        pipeline.process_single_stock = MagicMock(
+            return_value=SimpleNamespace(code="000001")
+        )
+        pipeline.notifier = _FakeNotifier()
+        pipeline.config = SimpleNamespace(
+            stock_list=["000001"],
+            refresh_stock_list=lambda: None,
+            single_stock_notify=False,
+            report_type="simple",
+            analysis_delay=0,
+            stock_email_groups=[],
+        )
+        pipeline._latest_run_notices = []
+
+        with patch("src.core.pipeline.time.monotonic", side_effect=[0.0, 0.45, 0.45]):
+            pipeline.run(
+                stock_codes=["000001", "000002", "000003"],
+                dry_run=False,
+                send_notification=False,
+                soft_timeout_deadline=0.5,
+                soft_timeout_grace_seconds=0.1,
+            )
+
+        saved_report = pipeline.notifier.save_report_to_file.call_args.args[0]
+        self.assertIn("本次日报为预算降级后的部分结果", saved_report)
+        self.assertIn("未开始分析的股票: 000002, 000003", saved_report)
 
 
 if __name__ == "__main__":

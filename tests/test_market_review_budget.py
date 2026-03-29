@@ -41,10 +41,39 @@ class TestMarketReviewBudget(unittest.TestCase):
             soft_timeout_grace_seconds=2.0,
         )
 
+        self.assertIn("本次大盘复盘为预算降级后的部分结果", report)
         self.assertIn("A股大盘复盘", report)
-        self.assertNotIn("美股大盘复盘", report)
+        self.assertNotIn("# 美股大盘复盘", report)
+        self.assertIn("已跳过美股大盘复盘：剩余预算不足。", report)
         cn_analyzer.run_daily_review.assert_called_once()
         us_analyzer.run_daily_review.assert_not_called()
+
+    @patch("src.core.market_review.get_config")
+    @patch("src.core.market_review.time.monotonic", return_value=9.0)
+    @patch("src.core.market_review.MarketAnalyzer")
+    def test_run_market_review_returns_budget_notice_when_stage_is_skipped(
+        self,
+        mock_market_analyzer,
+        _mock_monotonic,
+        mock_get_config,
+    ) -> None:
+        mock_get_config.return_value = SimpleNamespace(market_review_region="cn")
+        notifier = MagicMock()
+        notifier.save_report_to_file.return_value = "/tmp/market_review.md"
+        notifier.is_available.return_value = False
+
+        report = run_market_review(
+            notifier=notifier,
+            override_region="cn",
+            send_notification=False,
+            soft_timeout_deadline=10.0,
+            soft_timeout_grace_seconds=2.0,
+        )
+
+        self.assertIn("本次大盘复盘为预算降级后的部分结果", report)
+        self.assertIn("已跳过大盘复盘：剩余预算不足。", report)
+        notifier.save_report_to_file.assert_called_once()
+        mock_market_analyzer.assert_not_called()
 
 
 if __name__ == "__main__":

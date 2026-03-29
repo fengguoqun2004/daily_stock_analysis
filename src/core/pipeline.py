@@ -123,6 +123,7 @@ class StockAnalysisPipeline:
             api_key=self.config.social_sentiment_api_key,
             api_url=self.config.social_sentiment_api_url,
         )
+        self._latest_run_notices: List[str] = []
         if self.social_sentiment_service.is_available:
             logger.info("Social sentiment service enabled (Reddit/X/Polymarket, US stocks only)")
 
@@ -1205,6 +1206,7 @@ class StockAnalysisPipeline:
         logger.info(f"===== 开始分析 {len(stock_codes)} 只股票 =====")
         logger.info(f"股票列表: {', '.join(stock_codes)}")
         logger.info(f"并发数: {self.max_workers}, 模式: {'仅获取数据' if dry_run else '完整分析'}")
+        self._latest_run_notices = []
         
         # === 批量预取实时行情（优化：避免每只股票都触发全量拉取）===
         # 只有股票数量 >= 5 时才进行预取，少量股票直接逐个查询更高效
@@ -1303,31 +1305,33 @@ class StockAnalysisPipeline:
             # 收集结果
             while future_to_code:
                 future = next(as_completed(future_to_code))
-                code = future_to_code[future]
+                code = future_to_code.pop(future)
                 try:
                     result = future.result()
                     if result:
                         results.append(result)
 
-                    # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
-                    if (future_to_code or next_code_index < total_codes) and analysis_delay > 0:
-                        # 注意：此 sleep 发生在“主线程收集 future 的循环”中，
-                        # 并不会阻止线程池中的任务同时发起网络请求。
-                        # 因此它对降低并发请求峰值的效果有限；真正的峰值主要由 max_workers 决定。
-                        # 该行为目前保留（按需求不改逻辑）。
-                        logger.debug(f"等待 {analysis_delay} 秒后继续下一只股票...")
-                        time.sleep(analysis_delay)
-
                 except Exception as e:
                     logger.error(f"[{code}] 任务执行失败: {e}")
-                finally:
-                    future_to_code.pop(future, None)
 
+                submitted_after_completion = False
                 while len(future_to_code) < self.max_workers and next_code_index < total_codes:
                     if not _can_start_another_stock():
                         _skip_remaining_codes()
                         break
-                    _submit_next_stock(executor, future_to_code)
+                    submitted_after_completion = (
+                        _submit_next_stock(executor, future_to_code)
+                        or submitted_after_completion
+                    )
+
+                # Issue #128: 分析间隔 - 在个股分析和大盘分析之间添加延迟
+                if submitted_after_completion and analysis_delay > 0:
+                    # 注意：此 sleep 发生在“主线程收集 future 的循环”中，
+                    # 并不会阻止线程池中的任务同时发起网络请求。
+                    # 因此它对降低并发请求峰值的效果有限；真正的峰值主要由 max_workers 决定。
+                    # 该行为目前保留（按需求不改逻辑）。
+                    logger.debug(f"等待 {analysis_delay} 秒后继续下一只股票...")
+                    time.sleep(analysis_delay)
         
         # 统计
         elapsed_time = time.time() - start_time
@@ -1342,6 +1346,11 @@ class StockAnalysisPipeline:
         else:
             success_count = len(results)
             fail_count = submitted_count - success_count
+
+        if skipped_due_to_budget:
+            self._latest_run_notices = [
+                f"未开始分析的股票: {', '.join(skipped_due_to_budget)}"
+            ]
         
         logger.info("===== 分析完成 =====")
         logger.info(
@@ -1594,7 +1603,24 @@ class StockAnalysisPipeline:
         """Generate aggregate report with backward-compatible notifier fallback."""
         generator = getattr(self.notifier, "generate_aggregate_report", None)
         if callable(generator):
-            return generator(results, report_type)
-        if report_type == ReportType.BRIEF and hasattr(self.notifier, "generate_brief_report"):
-            return self.notifier.generate_brief_report(results)
-        return self.notifier.generate_dashboard_report(results)
+            report = generator(results, report_type)
+        elif report_type == ReportType.BRIEF and hasattr(self.notifier, "generate_brief_report"):
+            report = self.notifier.generate_brief_report(results)
+        else:
+            report = self.notifier.generate_dashboard_report(results)
+
+        notices = getattr(self, "_latest_run_notices", None) or []
+        if notices:
+            notice_lines = ["> ⚠️ 本次日报为预算降级后的部分结果。"]
+            notice_lines.extend(f"> {notice}" for notice in notices)
+            notice_block = "\n".join(notice_lines)
+            return f"{notice_block}\n\n{report}"
+        return report
+
+    def render_aggregate_report(
+        self,
+        results: List[AnalysisResult],
+        report_type: ReportType,
+    ) -> str:
+        """Expose aggregate report generation so main can reuse run-level notices."""
+        return self._generate_aggregate_report(results, report_type)

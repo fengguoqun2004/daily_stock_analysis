@@ -128,7 +128,7 @@ class MainScheduleModeTestCase(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         run_full_analysis.assert_called_once_with(config, args, ["600519", "000001"])
 
-    def test_run_full_analysis_skips_market_review_when_remaining_budget_is_too_small(self) -> None:
+    def test_run_full_analysis_delegates_budget_handling_to_market_review(self) -> None:
         args = self._make_args(no_notify=True)
         config = self._make_config(
             daily_run_soft_timeout_seconds=1,
@@ -143,10 +143,10 @@ class MainScheduleModeTestCase(unittest.TestCase):
              patch("main.time.monotonic", side_effect=[0.0, 1.0]):
             main.run_full_analysis(config, args, ["600519"])
 
-        run_market_review.assert_not_called()
+        run_market_review.assert_called_once()
         pipeline.run.assert_called_once()
 
-    def test_market_review_only_mode_skips_when_budget_is_already_exhausted(self) -> None:
+    def test_market_review_only_mode_delegates_budget_handling_to_market_review(self) -> None:
         args = self._make_args(market_review=True, no_notify=True, force_run=True)
         config = self._make_config(
             daily_run_soft_timeout_seconds=1,
@@ -158,12 +158,41 @@ class MainScheduleModeTestCase(unittest.TestCase):
         with patch("main.parse_arguments", return_value=args), \
              patch("main.get_config", return_value=config), \
              patch("main.setup_logging"), \
-             patch("main.run_market_review") as run_market_review, \
+             patch("src.core.market_review.run_market_review") as run_market_review, \
              patch("main.time.monotonic", side_effect=[0.0, 1.0]):
             exit_code = main.main()
 
         self.assertEqual(exit_code, 0)
-        run_market_review.assert_not_called()
+        run_market_review.assert_called_once()
+
+    def test_run_full_analysis_merge_notification_reuses_pipeline_report_notices(self) -> None:
+        args = self._make_args()
+        config = self._make_config(
+            merge_email_notification=True,
+            trading_day_check_enabled=False,
+        )
+        result = SimpleNamespace(
+            sentiment_score=1,
+            name="贵州茅台",
+            code="600519",
+            operation_advice="持有",
+            trend_prediction="震荡",
+            get_emoji=lambda: "📈",
+        )
+        pipeline = MagicMock()
+        pipeline.run.return_value = [result]
+        pipeline.render_aggregate_report.return_value = "> ⚠️ 本次日报为预算降级后的部分结果。\n\nreport"
+        pipeline.notifier.is_available.return_value = True
+        pipeline.notifier.send.return_value = True
+
+        with patch("main.StockAnalysisPipeline", return_value=pipeline), \
+             patch("main.run_market_review", return_value="market"), \
+             patch("main.time.monotonic", return_value=0.0):
+            main.run_full_analysis(config, args, ["600519"])
+
+        pipeline.render_aggregate_report.assert_called_once_with([result], "simple")
+        sent_content = pipeline.notifier.send.call_args.args[0]
+        self.assertIn("本次日报为预算降级后的部分结果", sent_content)
 
 
 if __name__ == "__main__":
