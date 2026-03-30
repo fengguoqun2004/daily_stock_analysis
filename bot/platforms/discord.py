@@ -182,6 +182,9 @@ class DiscordPlatform(BotPlatform):
     def format_response(self, response: Any, message: BotMessage) -> WebhookResponse:
         """将统一响应转换为 Discord 格式
         
+        对于 Interaction（type=2）请求，返回 Discord Interaction Response
+        callback 格式（type=4 CHANNEL_MESSAGE_WITH_SOURCE + nested data）。
+        
         Args:
             response: 统一响应对象
             message: 原始消息对象
@@ -189,16 +192,26 @@ class DiscordPlatform(BotPlatform):
         Returns:
             WebhookResponse 对象
         """
-        # 构建 Discord 响应格式
-        discord_response = {
-            "content": response.text if hasattr(response, "text") else str(response),
+        content = response.text if hasattr(response, "text") else str(response)
+
+        message_data = {
+            "content": content,
             "tts": False,
             "embeds": [],
             "allowed_mentions": {
                 "parse": ["users", "roles", "everyone"]
-            }
+            },
         }
-        
+
+        # Interaction（slash-command）需要 Interaction Response 回调格式
+        if message.raw_data.get("type") == 2:
+            discord_response = {
+                "type": 4,  # CHANNEL_MESSAGE_WITH_SOURCE
+                "data": message_data,
+            }
+        else:
+            discord_response = message_data
+
         return WebhookResponse.success(discord_response)
     
     def handle_challenge(self, data: Dict[str, Any]) -> Optional[WebhookResponse]:

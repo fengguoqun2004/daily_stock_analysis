@@ -170,6 +170,32 @@ def test_expired_timestamp_is_rejected():
     assert response.status_code == 401
 
 
+def test_format_response_wraps_interaction_callback():
+    """type=2 交互响应应使用 Interaction Response 回调格式（type=4 + data）。"""
+    from bot.models import BotMessage, BotResponse, ChatType
+
+    platform = _make_platform("00" * 32)
+    message = BotMessage(
+        platform="discord",
+        message_id="msg-1",
+        user_id="user-1",
+        user_name="tester",
+        chat_id="channel-1",
+        chat_type=ChatType.GROUP,
+        content="/analyze 600519",
+        raw_data={"type": 2, "data": {"name": "analyze"}},
+    )
+    response = BotResponse.text_response("分析结果")
+
+    webhook_response = platform.format_response(response, message)
+
+    assert webhook_response.status_code == 200
+    assert webhook_response.body["type"] == 4
+    assert "data" in webhook_response.body
+    assert webhook_response.body["data"]["content"] == "分析结果"
+    assert webhook_response.body["data"]["tts"] is False
+
+
 def test_non_numeric_timestamp_is_rejected():
     """非数字 timestamp 应被拒绝。"""
     signing_key = SigningKey.generate()
