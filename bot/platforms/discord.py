@@ -15,6 +15,7 @@ import time
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
+import requests
 from nacl.exceptions import BadSignatureError
 from nacl.signing import VerifyKey
 
@@ -124,7 +125,15 @@ class DiscordPlatform(BotPlatform):
         if challenge_response:
             return None, challenge_response
 
-        return self.parse_message(data), None
+        message = self.parse_message(data)
+        if message is not None and data.get("type") == 2:
+            # Discord requires an initial response within 3 s.  Return a
+            # deferred acknowledgement (type 5 = DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE)
+            # so the handler can dispatch the command in the background and
+            # deliver the result via follow-up webhook.
+            return message, WebhookResponse.success({"type": 5})
+
+        return message, None
     
     def parse_message(self, data: Dict[str, Any]) -> Optional[BotMessage]:
         """解析 Discord 消息为统一格式
@@ -214,6 +223,47 @@ class DiscordPlatform(BotPlatform):
 
         return WebhookResponse.success(discord_response)
     
+    def send_followup(self, response: Any, message: BotMessage) -> bool:
+        """Edit the deferred interaction placeholder with the real result.
+
+        Uses ``PATCH /webhooks/{application_id}/{token}/messages/@original``
+        to update the original deferred message created by the type-5
+        acknowledgement returned from :meth:`handle_webhook`.
+        """
+        raw = message.raw_data
+        application_id = raw.get("application_id", "")
+        interaction_token = raw.get("token", "")
+        if not application_id or not interaction_token:
+            logger.warning(
+                "[Discord] 缺少 application_id 或 interaction token，无法发送 follow-up"
+            )
+            return False
+
+        content = response.text if hasattr(response, "text") else str(response)
+        url = (
+            f"https://discord.com/api/v10/webhooks/"
+            f"{application_id}/{interaction_token}/messages/@original"
+        )
+
+        try:
+            resp = requests.patch(
+                url,
+                json={"content": content},
+                timeout=10,
+            )
+            if resp.status_code < 300:
+                logger.info("[Discord] follow-up 消息发送成功")
+                return True
+            logger.error(
+                "[Discord] follow-up 发送失败: %s %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return False
+        except Exception as exc:
+            logger.error("[Discord] follow-up 请求异常: %s", exc)
+            return False
+
     def handle_challenge(self, data: Dict[str, Any]) -> Optional[WebhookResponse]:
         """处理 Discord 验证请求
         

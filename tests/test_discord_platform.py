@@ -53,7 +53,8 @@ def test_signed_ping_request_is_accepted():
     assert response.body == {"type": 1}
 
 
-def test_signed_interaction_request_is_parsed():
+def test_signed_interaction_request_returns_deferred_ack():
+    """type=2 交互应返回 type 5 延迟 ACK，同时仍解析出 BotMessage。"""
     signing_key = SigningKey.generate()
     platform = _make_platform(signing_key.verify_key.encode().hex())
     payload = {
@@ -61,6 +62,8 @@ def test_signed_interaction_request_is_parsed():
         "type": 2,
         "channel_id": "channel-1",
         "guild_id": "guild-1",
+        "application_id": "app-123",
+        "token": "interaction-token",
         "member": {
             "user": {
                 "id": "user-1",
@@ -82,7 +85,12 @@ def test_signed_interaction_request_is_parsed():
         payload,
     )
 
-    assert response is None
+    # 应返回 type 5 延迟 ACK
+    assert response is not None
+    assert response.status_code == 200
+    assert response.body == {"type": 5}
+
+    # 同时仍解析出消息
     assert message is not None
     assert message.platform == "discord"
     assert message.chat_id == "channel-1"
@@ -90,6 +98,9 @@ def test_signed_interaction_request_is_parsed():
     assert message.user_id == "user-1"
     assert message.user_name == "tester"
     assert message.content == "/analyze 600519"
+    # follow-up 需要的字段存在于 raw_data
+    assert message.raw_data.get("application_id") == "app-123"
+    assert message.raw_data.get("token") == "interaction-token"
 
 
 def test_invalid_signature_ping_request_is_rejected_before_challenge():
@@ -194,6 +205,58 @@ def test_format_response_wraps_interaction_callback():
     assert "data" in webhook_response.body
     assert webhook_response.body["data"]["content"] == "分析结果"
     assert webhook_response.body["data"]["tts"] is False
+
+
+def test_send_followup_patches_original_message():
+    """send_followup 应 PATCH Discord follow-up webhook。"""
+    from bot.models import BotMessage, BotResponse, ChatType
+
+    platform = _make_platform("00" * 32)
+    message = BotMessage(
+        platform="discord",
+        message_id="msg-1",
+        user_id="user-1",
+        user_name="tester",
+        chat_id="channel-1",
+        chat_type=ChatType.GROUP,
+        content="/analyze 600519",
+        raw_data={
+            "type": 2,
+            "application_id": "app-123",
+            "token": "interaction-token",
+        },
+    )
+    response = BotResponse.text_response("分析结果")
+
+    with patch("bot.platforms.discord.requests") as mock_requests:
+        mock_resp = type("R", (), {"status_code": 200, "text": "ok"})()
+        mock_requests.patch.return_value = mock_resp
+        result = platform.send_followup(response, message)
+
+    assert result is True
+    mock_requests.patch.assert_called_once()
+    call_args = mock_requests.patch.call_args
+    assert "/app-123/interaction-token/messages/@original" in call_args[0][0]
+    assert call_args[1]["json"]["content"] == "分析结果"
+
+
+def test_send_followup_missing_token_returns_false():
+    """缺少 interaction token 时 send_followup 应返回 False。"""
+    from bot.models import BotMessage, BotResponse, ChatType
+
+    platform = _make_platform("00" * 32)
+    message = BotMessage(
+        platform="discord",
+        message_id="msg-1",
+        user_id="user-1",
+        user_name="tester",
+        chat_id="channel-1",
+        chat_type=ChatType.GROUP,
+        content="/analyze 600519",
+        raw_data={"type": 2},
+    )
+    response = BotResponse.text_response("分析结果")
+    assert platform.send_followup(response, message) is False
 
 
 def test_non_numeric_timestamp_is_rejected():
