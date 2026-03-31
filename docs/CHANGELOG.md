@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 技能加载异常被静默吞没问题 — 在 ask.py、skills/aggregator.py、skills/router.py 的静默 except 块补充 logger.warning 日志，确保技能列表为空时有日志可查（fixes #970）
 - [修复] SQLite 主写入链路现在对 `stock_daily(code,date)` 使用批量原子 upsert，并在文件型 SQLite 连接上默认启用 `WAL`、`busy_timeout` 与有限写入重试，降低批量分析和并发回写场景下的锁竞争与吞吐抖动，返回值中的“新增数”改为按本次真正插入窗口计算（并发场景不再把并行写入行误算入当前调用）。
 - [修复] 优化多 Agent 与单 Agent 的预算护栏语义：当后续阶段/步骤剩余预算低于最小阈值（首阶段除外）时会主动跳过并进行降级处理；若当前已完成阶段可支持构建降级报告，则返回 `success=True` 并携带非空内容；否则返回 `success=False`、`content=""`；`run_agent_loop` 预算过低时当前仍返回失败降级语义（`success=False`、`content=""`），`AgentExecutor` 保持统一下游契约。
+- [修复] `LLM_CHANNELS` 在未配置 `LLM_{NAME}_API_KEY(S)` 时，只对内置 provider 渠道（`openai`、`deepseek`、`gemini`、`vertex_ai`、`anthropic`）及其已知别名回退匹配 legacy secrets；自定义渠道即便配置了 `LLM_{NAME}_PROTOCOL` 也不会误用其他 provider 的 `OPENAI_API_KEY`、`DEEPSEEK_API_KEY` 等。
+- [文档] 明确自定义渠道边界：当 `LLM_{NAME}_BASE_URL` 命中官方 provider HTTPS host（如 `api.openai.com`、`api.deepseek.com`、`api.aihubmix.com`、`api.anthropic.com`、`generativelanguage.googleapis.com`、`aiplatform.googleapis.com`）时，可按 host 与 legacy secret 回退；仅当自定义渠道指向非官方 host 时，才必须走 YAML 路径（未提交 `litellm_config.yaml` 时需同时配置 `LITELLM_CONFIG` 与 `LITELLM_CONFIG_YAML`，提交后只保留 `LITELLM_CONFIG`），并同步到 FAQ / LLM 配置文档。
 
 ## [3.12.0] - 2026-04-01
 
@@ -78,10 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 飞书群机器人通知现在支持 `FEISHU_WEBHOOK_SECRET` / `FEISHU_WEBHOOK_KEYWORD`，并在 Web 设置与文档中明确区分 Webhook 推送和 `FEISHU_APP_ID` / `FEISHU_APP_SECRET` 应用模式，降低误配导致的推送失败。
 - [改进] 🤖 **普通分析链路支持 LiteLLM 流式生成与更细任务进度** — 常规股票分析在 LLM 阶段会优先尝试 `stream=True` 并在服务端累积 chunk，首页任务 SSE 新增 `task_progress` 事件与更细的 `message/progress` 更新；仅在最终 JSON 解析成功后才持久化历史报告，不支持流式的 provider 会在首个 chunk 前自动回退到原非流式调用。
 - [新功能] Web AI 模型配置支持按渠道调用 `/models` 获取可用模型，并在渠道编辑器中以多选方式写回 `LLM_{CHANNEL}_MODELS`，获取失败时仍保留手动输入作为降级路径。
-- [修复] `LLM_CHANNELS` 现在会在常见 provider 渠道缺少 `LLM_{NAME}_API_KEY(S)` 时，安全回退读取匹配的 legacy Secrets（如 `DEEPSEEK_API_KEY`、`AIHUBMIX_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`），让 GitHub Actions 可继续使用默认 `.env` 的非敏感渠道结构。
-- [修复] `LLM_CHANNELS` 现在会在常见 provider 渠道缺少 `LLM_{NAME}_API_KEY(S)` 时，安全回退读取匹配的 legacy Secrets（如 `DEEPSEEK_API_KEY`、`AIHUBMIX_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`），让 GitHub Actions 可继续使用默认 `.env` 的非敏感渠道结构。当渠道配置了自定义 `base_url` 时，仅通过严格域名校验匹配 legacy 密钥，防止凭据泄露到非官方端点。
-- [修复] `LLM_CHANNELS` 现在会在常见 provider 渠道缺少 `LLM_{NAME}_API_KEY(S)` 时，安全回退读取匹配的 legacy Secrets（如 `DEEPSEEK_API_KEY`、`AIHUBMIX_KEY`、`OPENAI_API_KEY`、`GEMINI_API_KEY`、`ANTHROPIC_API_KEY`），让 GitHub Actions 可继续使用默认 `.env` 的非敏感渠道结构。当渠道配置了自定义 `base_url` 时，仅当 URL 使用 HTTPS 协议且通过严格域名校验时才匹配 legacy 密钥，防止凭据通过明文 HTTP 或非官方端点泄露。
-- [文档] 更新中英文 LLM 配置指南与 FAQ，补充 GitHub Actions 下渠道模式复用 legacy Secrets 的用法，并明确自定义渠道仍建议使用 `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`。
 
 ## [3.11.0] - 2026-03-27
 
@@ -423,7 +421,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - 🤖 **Agent background execution** (#495) — analysis continues when switching pages; badge notification on completion; auto-cancel in-progress stream on session switch
 - 📝 **Report Engine P0** — Pydantic schema validation for LLM JSON; Jinja2 templates (markdown/wechat/brief) with legacy fallback; content integrity checks with retry; brief mode (`REPORT_TYPE=brief`); history signal comparison
 - 📦 **Smart import** — multi-source import from image/CSV/Excel/clipboard; Vision LLM extracts code+name+confidence; name→code resolver (local map + pinyin + AkShare); confidence-tiered confirmation
-- ⚙️ **GitHub Actions LiteLLM config** — workflow supports `LITELLM_CONFIG`/`LITELLM_CONFIG_YAML` for flexible AI provider configuration
+- ⚙️ **GitHub Actions LiteLLM config** — workflow supports `LITELLM_CONFIG` as the custom routing configuration file path for AI provider setup
 - ⚙️ **Config engine refactor & system API** (#602) — unified config registry, validation and API exposure
 - 📖 **LLM configuration guide** — new `docs/LLM_CONFIG_GUIDE.md` covering 3-tier config, quick start, Vision/Agent/troubleshooting
 

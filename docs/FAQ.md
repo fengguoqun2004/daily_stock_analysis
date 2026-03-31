@@ -91,7 +91,10 @@
    - `REPORT_TYPE`
    - `LLM_CHANNELS`、`LLM_{NAME}_BASE_URL`、`LLM_{NAME}_MODELS`
 
-如果你在 GitHub Actions 使用 `LLM_CHANNELS=deepseek,aihubmix` 这类常见 provider 渠道，不必把真实 `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` 写进默认 `.env`；把真实 Key 放在 `DEEPSEEK_API_KEY`、`AIHUBMIX_KEY`（或 `OPENAI_API_KEY`）即可。自定义渠道名仍建议改用 `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`。
+如果你在 GitHub Actions 使用 `LLM_CHANNELS=deepseek,aihubmix` 这类常见 provider 渠道，不必把真实 `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` 写进默认 `.env`；把真实 Key 放在 `DEEPSEEK_API_KEY`、`AIHUBMIX_KEY`（或 `OPENAI_API_KEY`）即可。  
+自定义渠道名可走高级 YAML 配置：  
+- 已提交 `litellm_config.yaml` 到仓库：只需在 `Actions` 中配置 `LITELLM_CONFIG` 指向文件路径（例如 `./litellm_config.yaml`）。  
+- 未提交文件：同时配置 `LITELLM_CONFIG=./litellm_config.yaml`（或其他可写路径）与 `LITELLM_CONFIG_YAML`（Secrets/Variables 中放 YAML 内容），workflow 会在运行时写入文件。
 
 ---
 
@@ -135,7 +138,7 @@ PROXY_PORT=10809
 
 **Q: 配置了 GEMINI_API_KEY 和 LLM_CHANNELS，为什么只用渠道？**
 
-系统按优先级只取一种：高级模型路由 YAML（`LITELLM_CONFIG`）> `LLM_CHANNELS` > legacy keys。YAML 仅在文件可正常解析且产出了有效 `model_list` 时才生效；路径无效或内容为空时自动回退。当你使用 `deepseek`、`aihubmix`、`openai`、`gemini`、`anthropic` 这类内置渠道名且未配置 `LLM_{NAME}_API_KEY(S)` 时，渠道模式会自动读取对应 legacy Secrets（如 `DEEPSEEK_API_KEY`），方便 GitHub Actions 沿用既有 Secrets。自定义渠道名不会自动回退。
+系统按优先级只取一种：高级模型路由 YAML（`LITELLM_CONFIG`）> `LLM_CHANNELS` > legacy keys。YAML 仅在文件可正常解析且产出了有效 `model_list` 时才生效；路径无效或内容为空时自动回退。当你使用 `deepseek`、`aihubmix`、`openai`、`gemini`、`anthropic` 这类内置渠道名且未配置 `LLM_{NAME}_API_KEY(S)` 时，渠道模式会自动读取对应 legacy Secrets（如 `DEEPSEEK_API_KEY`）。自定义渠道若 `LLM_<NAME>_BASE_URL` 指向官方 provider HTTPS host（如 `api.openai.com`、`api.deepseek.com`、`api.aihubmix.com`），也会按 host 回退到对应 legacy Secret；只有在自定义渠道指向其他 host 时，才需要改走高级 YAML。
 
 **Q: test_env 输出“未配置可用 AI 模型”怎么办？**
 

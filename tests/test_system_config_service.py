@@ -278,6 +278,45 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertTrue(validation["valid"], validation["issues"])
         self.assertEqual(validation["issues"], [])
 
+    def test_validate_accepts_channel_with_legacy_deepseek_key_fallback(self) -> None:
+        validation = self.service.validate(
+            items=[
+                {"key": "LLM_CHANNELS", "value": "deepseek"},
+                {"key": "LLM_DEEPSEEK_BASE_URL", "value": "https://api.deepseek.com/v1"},
+                {"key": "LLM_DEEPSEEK_MODELS", "value": "deepseek-chat"},
+                {"key": "DEEPSEEK_API_KEY", "value": "sk-deepseek-legacy"},
+            ]
+        )
+
+        self.assertTrue(validation["valid"])
+        self.assertFalse(any(issue["code"] == "missing_api_key" for issue in validation["issues"]))
+
+    def test_validate_accepts_custom_channel_with_official_anthropic_host_legacy_fallback(self) -> None:
+        validation = self.service.validate(
+            items=[
+                {"key": "LLM_CHANNELS", "value": "my_claude"},
+                {"key": "LLM_MY_CLAUDE_BASE_URL", "value": "https://api.anthropic.com/v1"},
+                {"key": "LLM_MY_CLAUDE_MODELS", "value": "claude-3-5-sonnet"},
+                {"key": "ANTHROPIC_API_KEY", "value": "sk-anthropic-legacy"},
+            ]
+        )
+
+        self.assertTrue(validation["valid"])
+        self.assertFalse(any(issue["code"] == "missing_api_key" for issue in validation["issues"]))
+
+    def test_validate_rejects_custom_channel_without_base_url_protocol_override_no_legacy_fallback(self) -> None:
+        validation = self.service.validate(
+            items=[
+                {"key": "LLM_CHANNELS", "value": "my_proxy"},
+                {"key": "LLM_MY_PROXY_PROTOCOL", "value": "openai"},
+                {"key": "LLM_MY_PROXY_MODELS", "value": "gpt-4o-mini"},
+                {"key": "OPENAI_API_KEY", "value": "sk-openai-legacy"},
+            ]
+        )
+
+        self.assertFalse(validation["valid"])
+        self.assertTrue(any(issue["code"] == "missing_api_key" for issue in validation["issues"]))
+
     def test_validate_reports_unknown_primary_model_for_channels(self) -> None:
         validation = self.service.validate(
             items=[
@@ -653,6 +692,28 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(mock_get.call_args.kwargs["allow_redirects"])
 
     @patch("src.services.system_config_service.requests.get")
+    def test_discover_llm_channel_models_uses_legacy_env_key_when_request_key_empty(self, mock_get) -> None:
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "sk-deepseek-legacy"}, clear=False):
+            mock_response = Mock()
+            mock_response.ok = True
+            mock_response.status_code = 200
+            mock_response.json.return_value = {"data": [{"id": "deepseek-chat"}]}
+            mock_get.return_value = mock_response
+
+            payload = self.service.discover_llm_channel_models(
+                name="deepseek",
+                protocol="deepseek",
+                base_url="https://api.deepseek.com/v1",
+                api_key="",
+            )
+
+            self.assertTrue(payload["success"])
+            self.assertEqual(
+                mock_get.call_args.kwargs["headers"]["Authorization"],
+                "Bearer sk-deepseek-legacy",
+            )
+
+    @patch("src.services.system_config_service.requests.get")
     def test_discover_llm_channel_models_rejects_redirect_responses(self, mock_get) -> None:
         mock_response = Mock()
         mock_response.ok = True
@@ -695,12 +756,54 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(payload["resolved_protocol"], "gemini")
         self.assertIn("does not support /models discovery yet", payload["error"])
 
+    def test_discover_llm_channel_models_rejects_official_anthropic_host_as_unsupported(self) -> None:
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-anthropic-legacy"}, clear=False):
+            payload = self.service.discover_llm_channel_models(
+                name="my_claude",
+                protocol="",
+                base_url="https://api.anthropic.com/v1",
+                api_key="",
+                models=["claude-3-5-sonnet"],
+            )
+
+        self.assertFalse(payload["success"])
+        self.assertEqual(payload["resolved_protocol"], "anthropic")
+        self.assertIn("does not support /models discovery yet", payload["error"])
+
     def test_build_llm_models_url_strips_query_and_fragment(self) -> None:
         models_url = SystemConfigService._build_llm_models_url(
             "https://example.com/v1/chat/completions?api-version=1#frag"
         )
 
         self.assertEqual(models_url, "https://example.com/v1/models")
+
+    def test_test_llm_channel_uses_legacy_env_key_when_request_key_empty(self) -> None:
+        with patch("litellm.completion") as mock_completion, patch.dict(
+            os.environ,
+            {"AIHUBMIX_KEY": "sk-aihubmix-legacy"},
+            clear=False,
+        ):
+            mock_completion.return_value = type(
+                "MockResponse",
+                (),
+                {
+                    "choices": [type("Choice", (), {"message": type("Message", (), {"content": "OK"})()})()],
+                },
+            )()
+
+            payload = self.service.test_llm_channel(
+                name="aihubmix",
+                protocol="openai",
+                base_url="https://api.aihubmix.com/v1",
+                api_key="",
+                models=["gpt-4o-mini"],
+            )
+
+            self.assertTrue(payload["success"])
+            self.assertEqual(
+                mock_completion.call_args.kwargs.get("api_key"),
+                "sk-aihubmix-legacy",
+            )
 
     def test_validate_reports_invalid_event_rule_semantics(self) -> None:
         validation = self.service.validate(items=[{

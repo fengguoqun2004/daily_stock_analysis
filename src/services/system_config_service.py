@@ -14,8 +14,11 @@ from urllib.parse import urljoin, urlparse, urlunparse
 import requests
 
 from src.config import (
+    _is_provider_host,
+    _MANAGED_LITELLM_KEY_PROVIDERS,
     SUPPORTED_LLM_CHANNEL_PROTOCOLS,
     Config,
+    resolve_channel_legacy_api_keys,
     _get_litellm_provider,
     _uses_direct_env_provider,
     canonicalize_llm_channel_protocol,
@@ -292,6 +295,14 @@ class SystemConfigService:
             }
 
         api_keys = [segment.strip() for segment in api_key.split(",") if segment.strip()]
+        if not api_keys and not channel_allows_empty_api_key(resolved_protocol, base_url):
+            fallback_api_keys, _ = resolve_channel_legacy_api_keys(
+                channel_name=name,
+                base_url=base_url,
+                resolved_protocol=resolved_protocol,
+            )
+            if fallback_api_keys:
+                api_keys = fallback_api_keys
         selected_api_key = api_keys[0] if api_keys else ""
         request_headers = {"Accept": "application/json"}
         if selected_api_key:
@@ -410,6 +421,14 @@ class SystemConfigService:
         resolved_models = [normalize_llm_channel_model(model, resolved_protocol, base_url) for model in raw_models]
         resolved_model = resolved_models[0]
         api_keys = [segment.strip() for segment in api_key.split(",") if segment.strip()]
+        if not api_keys and not channel_allows_empty_api_key(resolved_protocol, base_url):
+            fallback_api_keys, _ = resolve_channel_legacy_api_keys(
+                channel_name=name,
+                base_url=base_url,
+                resolved_protocol=resolved_protocol,
+            )
+            if fallback_api_keys:
+                api_keys = fallback_api_keys
         selected_api_key = api_keys[0] if api_keys else ""
 
         call_kwargs: Dict[str, Any] = {
@@ -1165,6 +1184,7 @@ class SystemConfigService:
                     enabled=enabled,
                     field_prefix=prefix,
                     require_complete=enabled,
+                    effective_map=effective_map,
                 )
             )
 
@@ -1455,6 +1475,7 @@ class SystemConfigService:
         enabled: bool,
         field_prefix: str,
         require_complete: bool,
+        effective_map: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         """Validate one normalized LLM channel definition."""
         if not require_complete:
@@ -1468,6 +1489,7 @@ class SystemConfigService:
             model_values=model_values,
             field_prefix=field_prefix,
             require_base_url=False,
+            effective_map=effective_map,
         )
         models_key = f"{field_prefix}_MODELS" if field_prefix != "test_channel" else "models"
 
@@ -1482,6 +1504,7 @@ class SystemConfigService:
                     "actual": "",
                 }
             )
+
         elif not resolved_protocol:
             unresolved = [model for model in model_values if "/" not in model]
             if unresolved:
@@ -1511,6 +1534,7 @@ class SystemConfigService:
         model_values: Sequence[str] = (),
         field_prefix: str,
         require_base_url: bool,
+        effective_map: Optional[Dict[str, str]] = None,
     ) -> Tuple[List[Dict[str, Any]], str]:
         """Validate connection-level fields shared by test and discovery flows."""
         issues: List[Dict[str, Any]] = []
@@ -1581,14 +1605,87 @@ class SystemConfigService:
         # treated as empty (they produce zero usable keys after split+strip).
         _parsed_api_keys = [seg.strip() for seg in api_key_value.split(",") if seg.strip()]
         if not _parsed_api_keys and not channel_allows_empty_api_key(resolved_protocol, base_url_value):
-            issues.append(
-                {
-                    "key": api_key_key,
-                    "code": "missing_api_key",
-                    "message": f"LLM channel '{channel_name}' requires an API key",
-                    "severity": "error",
-                    "expected": "non-empty API key",
-                    "actual": api_key_value,
-                }
-            )
+            if effective_map is not None:
+                _fallback_api_keys = SystemConfigService._read_legacy_api_keys_from_map(
+                    channel_name=channel_name,
+                    base_url=base_url_value,
+                    resolved_protocol=resolved_protocol,
+                    effective_map=effective_map,
+                )
+            else:
+                _fallback_api_keys, _ = resolve_channel_legacy_api_keys(
+                    channel_name=channel_name,
+                    base_url=base_url_value,
+                    resolved_protocol=resolved_protocol,
+                )
+            if not _fallback_api_keys:
+                issues.append(
+                    {
+                        "key": api_key_key,
+                        "code": "missing_api_key",
+                        "message": f"LLM channel '{channel_name}' requires an API key",
+                        "severity": "error",
+                        "expected": "non-empty API key",
+                        "actual": api_key_value,
+                    }
+                )
         return issues, resolved_protocol
+
+    @staticmethod
+    def _read_legacy_api_keys_from_map(
+        *,
+        channel_name: str,
+        base_url: Optional[str],
+        resolved_protocol: Optional[str],
+        effective_map: Dict[str, str],
+    ) -> List[str]:
+        """Resolve legacy API keys from the effective form values (without reading process env)."""
+        normalized_channel = canonicalize_llm_channel_protocol(channel_name)
+        normalized_protocol = canonicalize_llm_channel_protocol(resolved_protocol) if resolved_protocol else None
+        effective_name = (
+            normalized_protocol
+            if resolved_protocol and normalized_channel in _MANAGED_LITELLM_KEY_PROVIDERS
+            else normalized_channel
+        )
+        raw_name = (channel_name or "").strip().lower()
+        normalized_name = effective_name
+        parsed_url = urlparse(base_url or "")
+        host = (parsed_url.hostname or "").lower()
+        scheme = (parsed_url.scheme or "").lower()
+        has_custom_url = bool(base_url and base_url.strip())
+        host_fallback_ok = has_custom_url and scheme == "https"
+
+        def _read_from_map(csv_key: str, single_key: str) -> List[str]:
+            csv_value = (effective_map.get(csv_key) or "").strip()
+            keys = [k.strip() for k in csv_value.split(",") if k.strip()]
+            if keys:
+                return keys
+            single_value = (effective_map.get(single_key) or "").strip()
+            return [single_value] if single_value else []
+
+        if (
+            (host_fallback_ok and _is_provider_host(host, "aihubmix.com"))
+            or (not has_custom_url and normalized_name == "aihubmix")
+        ):
+            aihubmix_key = (effective_map.get("AIHUBMIX_KEY") or "").strip()
+            if aihubmix_key:
+                return [aihubmix_key]
+            return _read_from_map("OPENAI_API_KEYS", "OPENAI_API_KEY")
+
+        if (host_fallback_ok and _is_provider_host(host, "deepseek.com")) or (not has_custom_url and normalized_name == "deepseek"):
+            return _read_from_map("DEEPSEEK_API_KEYS", "DEEPSEEK_API_KEY")
+
+        if (
+            (host_fallback_ok and _is_provider_host(host, "generativelanguage.googleapis.com"))
+            or (host_fallback_ok and _is_provider_host(host, "aiplatform.googleapis.com"))
+            or (not has_custom_url and normalized_name in {"gemini", "vertex_ai"})
+        ):
+            return _read_from_map("GEMINI_API_KEYS", "GEMINI_API_KEY")
+
+        if (host_fallback_ok and _is_provider_host(host, "anthropic.com")) or (not has_custom_url and normalized_name == "anthropic"):
+            return _read_from_map("ANTHROPIC_API_KEYS", "ANTHROPIC_API_KEY")
+
+        if (host_fallback_ok and _is_provider_host(host, "openai.com")) or (not has_custom_url and normalized_name == "openai"):
+            return _read_from_map("OPENAI_API_KEYS", "OPENAI_API_KEY")
+
+        return []

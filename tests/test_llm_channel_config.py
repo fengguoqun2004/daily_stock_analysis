@@ -319,6 +319,58 @@ class LLMChannelConfigTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_custom_channel_with_official_anthropic_host_infers_anthropic_protocol(self, _mock_parse_yaml, _mock_setup_env) -> None:
+        env = {
+            "LLM_CHANNELS": "my_claude",
+            "LLM_MY_CLAUDE_BASE_URL": "https://api.anthropic.com/v1",
+            "LLM_MY_CLAUDE_MODELS": "claude-3-5-sonnet",
+            "ANTHROPIC_API_KEY": "sk-anthropic-legacy",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.llm_channels[0]["protocol"], "anthropic")
+        self.assertEqual(config.llm_channels[0]["models"], ["anthropic/claude-3-5-sonnet"])
+        self.assertEqual(config.llm_channels[0]["api_keys"], ["sk-anthropic-legacy"])
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_custom_channel_without_base_url_does_not_match_protocol_override_legacy_fallback(self, _mock_parse_yaml, _mock_setup_env) -> None:
+        env = {
+            "LLM_CHANNELS": "my_proxy",
+            "LLM_MY_PROXY_PROTOCOL": "openai",
+            "LLM_MY_PROXY_MODELS": "gpt-4o-mini",
+            "OPENAI_API_KEY": "sk-openai-legacy",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.llm_channels, [])
+        self.assertEqual(config.llm_models_source, "legacy_env")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_explicit_protocol_override_selects_legacy_key_by_protocol(self, _mock_parse_yaml, _mock_setup_env) -> None:
+        """When LLM_{NAME}_PROTOCOL differs from channel name, legacy key
+        fallback should match the resolved protocol, not the channel name."""
+        env = {
+            "LLM_CHANNELS": "gemini",
+            "LLM_GEMINI_PROTOCOL": "openai",
+            "LLM_GEMINI_MODELS": "gpt-4o-mini",
+            "GEMINI_API_KEY": "sk-gemini-wrong",
+            "OPENAI_API_KEY": "sk-openai-correct",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.llm_channels[0]["protocol"], "openai")
+        self.assertEqual(config.llm_channels[0]["api_keys"], ["sk-openai-correct"])
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_llm_temperature_falls_back_to_legacy_provider_temperature(self, _mock_parse_yaml, _mock_setup_env) -> None:
         env = {
             "GEMINI_API_KEY": "secret-key-value",

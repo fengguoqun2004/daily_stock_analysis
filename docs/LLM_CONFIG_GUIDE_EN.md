@@ -119,11 +119,14 @@ LITELLM_MODEL=ollama/qwen3:8b
 - If you access MiniMax through an OpenAI-compatible channel, enter the model as `minimax/<model-name>` in the channel model list, for example `minimax/MiniMax-M1`.
 - The Web settings page now keeps that value unchanged in Primary, Agent Primary, Fallback, and Vision selectors instead of rewriting it to `openai/minimax/<model-name>`.
 
-> **Critical Warning**: If you enable `LLM_CHANNELS`, any standard `DEEPSEEK_API_KEY` or `OPENAI_API_KEY` declared independently will be **completely ignored**. **Use only one mode** to prevent configuration conflicts.
+> **Key Note**: Enabling `LLM_CHANNELS` makes channel mode the primary mode. For common providers (such as `deepseek`, `aihubmix`, `openai`, `gemini`, `anthropic`), if `LLM_{NAME}_API_KEY(S)` is not provided, the system safely falls back to the corresponding legacy secret by channel name/official host (for example, `DEEPSEEK_API_KEY(S)`, `AIHUBMIX_KEY / OPENAI_API_KEY(S)`, `GEMINI_API_KEY(S)`, `ANTHROPIC_API_KEY(S)`).  
+If a custom channel `LLM_{NAME}_BASE_URL` points to an official provider HTTPS host (for example `api.openai.com`, `api.deepseek.com`, `api.aihubmix.com`, `api.anthropic.com`, `generativelanguage.googleapis.com`, `aiplatform.googleapis.com`), it also follows the same host-based legacy secret fallback. If you use a non-official host, use the advanced YAML path: with committed YAML set only `LITELLM_CONFIG` (file path); without file submission, also provide `LITELLM_CONFIG_YAML`.
 
 > **GitHub Actions Compatibility**: Channels mode still wins over legacy mode, but well-known provider channels can now safely reuse existing Secrets when `LLM_{NAME}_API_KEY(S)` is absent: `deepseek -> DEEPSEEK_API_KEY(S)`, `aihubmix -> AIHUBMIX_KEY / OPENAI_API_KEY(S)`, `openai -> OPENAI_API_KEY(S)`, `gemini/vertex -> GEMINI_API_KEY(S)`, `anthropic/claude -> ANTHROPIC_API_KEY(S)`. This lets you keep only the non-sensitive channel structure in the default `.env` and store real keys in GitHub Secrets instead of writing real `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` values into repo config.
 >
-> **Boundary**: This fallback only applies to common provider channel names / official hosts. Custom channel names such as `my_proxy` or `corp_gateway` should still use `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML` in GitHub Actions.
+> **Boundary**: This fallback applies to built-in provider channel names, and also to any channel whose `LLM_<NAME>_BASE_URL` resolves to an official provider host over HTTPS. Custom channels pointing to private/proxy hosts (for example `proxy.example.com`, `my_proxy`) do not auto-map legacy secrets; use advanced YAML routing:
+> - If you commit an actual `litellm_config.yaml` file: set `LITELLM_CONFIG` to its path (for example, `./litellm_config.yaml`).
+> - If you do not commit a file: set `LITELLM_CONFIG` to the target path and also set `LITELLM_CONFIG_YAML` in Secrets/Variables; the workflow will write the YAML content at runtime.
 
 ---
 
@@ -183,7 +186,9 @@ Store the real keys in GitHub Secrets:
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`
 
-This works without changing the workflow and avoids writing real `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` values into the default `.env`. For custom channel names, prefer `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`.
+This works without changing the workflow and avoids writing real `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` values into the default `.env`. If a custom channel name uses an official provider HTTPS host, it can still inherit legacy secrets via host-based fallback; if it uses a custom proxy host, use advanced YAML routing and choose one of:
+- If you commit `litellm_config.yaml` in the repo: only set `LITELLM_CONFIG=./litellm_config.yaml`.
+- If you do not commit the file: set both `LITELLM_CONFIG=./litellm_config.yaml` and `LITELLM_CONFIG_YAML` (content via Secrets/Variables).
 
 ---
 
@@ -218,7 +223,7 @@ Afraid you got the config wrong? Type the following commands in your terminal to
 | Weird Error You Got? | Likely Culprit | How to Fix It? |
 |----------------------|----------------|----------------|
 | **The UI says the primary model is not configured** | The system doesn't know which provider/model you want to use. | Add a clear instruction in `.env`: `LITELLM_MODEL=provider/your_model_name`. Example: `openai/gpt-4o-mini`. |
-| **I added multiple provider Keys, why is only one working?** | Usually you mixed config modes, or your channel name does not match a supported fallback mapping. | For local / Docker, prefer explicit `LLM_{NAME}_API_KEY(S)`. In GitHub Actions, common provider channel names such as `deepseek` / `aihubmix` / `openai` / `gemini` / `anthropic` can reuse matching legacy Secrets. Custom channel names should switch to `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`. |
+| **I added multiple provider Keys, why is only one working?** | Usually you mixed config modes, or your channel name does not match a supported fallback mapping. | For local / Docker, prefer explicit `LLM_{NAME}_API_KEY(S)`. In GitHub Actions, built-in provider channels (`deepseek` / `aihubmix` / `openai` / `gemini` / `anthropic`) and custom channels with official HTTPS `LLM_<NAME>_BASE_URL` can reuse matching legacy Secrets. If your custom channel uses a proxy/private host, use advanced YAML routing: commit `litellm_config.yaml` and set only `LITELLM_CONFIG`, or set both `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`. |
 | **Returns 400, 401, or Invalid API Key** | The API Key is wrong, copied incompletely, account lacks credits, or you mistyped the model name (extremely common). | 1. Ensure there are no spaces at the start/end of your Key.<br> 2. Ensure your Base URL ends with `/v1`.<br> 3. Check if you forgot the `openai/` prefix on the model name! |
 | **Spins endlessly, eventually hits Timeout/ConnectionRefused** | You are using restricted APIs (like Google/OpenAI) in a blocked region without a proxy, or your cloud server lacks external internet access. | Highly recommend using **official regional APIs** (like DeepSeek) or **OpenAI-compatible relay platforms**. Third-party platforms bypass these network constraints. |
 | **Ollama returns 404, `Could not get model info`, or `api/generate/api/show`** | Using `OPENAI_BASE_URL` for Ollama makes the system concatenate URLs incorrectly | Use `OLLAMA_API_BASE=http://localhost:11434` or channel mode (`LLM_CHANNELS=ollama` + `LLM_OLLAMA_BASE_URL`) instead |

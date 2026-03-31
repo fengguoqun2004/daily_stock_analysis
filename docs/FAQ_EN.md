@@ -89,7 +89,10 @@ This document compiles common issues encountered by users and their solutions.
    - `REPORT_TYPE`
    - `LLM_CHANNELS`, `LLM_{NAME}_BASE_URL`, `LLM_{NAME}_MODELS`
 
-If you run `LLM_CHANNELS=deepseek,aihubmix` in GitHub Actions, you do not need to put real `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` values into the default `.env`. Put the real keys in `DEEPSEEK_API_KEY` and `AIHUBMIX_KEY` (or `OPENAI_API_KEY`) instead. Custom channel names should still use `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`.
+If you run `LLM_CHANNELS=deepseek,aihubmix` in GitHub Actions, you do not need to put real `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` values into the default `.env`. Put the real keys in `DEEPSEEK_API_KEY` and `AIHUBMIX_KEY` (or `OPENAI_API_KEY`) instead.  
+For custom channel names, use advanced YAML routing:
+- If you commit `litellm_config.yaml` in the repo: only set `LITELLM_CONFIG` to the file path (for example, `./litellm_config.yaml`).
+- If you do not commit the file: set both `LITELLM_CONFIG=./litellm_config.yaml` (or another writable path) and `LITELLM_CONFIG_YAML` (YAML content in Secrets/Variables), and the workflow will write the file at runtime.
 
 ---
 
@@ -134,6 +137,7 @@ PROXY_PORT=10809
 **Q: Configured both GEMINI_API_KEY and LLM_CHANNELS, why does it only use channels?**
 
 The system uses exactly one mode by priority: advanced YAML routing (`LITELLM_CONFIG`) > `LLM_CHANNELS` > legacy keys. YAML routing only takes effect when the file parses successfully and yields a non-empty `model_list`; otherwise it falls back automatically. Well-known channel names such as `deepseek`, `aihubmix`, `openai`, `gemini`, and `anthropic` can safely fall back to matching legacy Secrets (e.g. `DEEPSEEK_API_KEY`) when `LLM_{NAME}_API_KEY(S)` is absent, which is useful for GitHub Actions. Custom channel names do not auto-fallback.
+Custom channel names also can auto-fallback when `LLM_<NAME>_BASE_URL` points to an official provider HTTPS host (for example `api.openai.com`, `api.deepseek.com`, `api.aihubmix.com`); otherwise they must use advanced YAML routing.
 
 **Q: test_env says no usable AI model is configured, what should I do?**
 

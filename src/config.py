@@ -90,14 +90,31 @@ def _is_provider_host(host: str, domain: str) -> bool:
     return host == domain or host.endswith('.' + domain)
 
 
-def resolve_channel_legacy_api_keys(channel_name: str, base_url: Optional[str]) -> Tuple[List[str], Optional[str]]:
+def resolve_channel_legacy_api_keys(
+    channel_name: str,
+    base_url: Optional[str],
+    resolved_protocol: Optional[str] = None,
+) -> Tuple[List[str], Optional[str]]:
     """Map well-known channel names/hosts to legacy provider secrets.
 
     This keeps local/Docker channel-specific env vars as the primary source, but
     allows common provider channels in GitHub Actions to reuse existing legacy
     secret names without writing real keys into the default `.env`.
+
+    Protocol override is only honored for known provider channels (e.g.
+    ``openai``, ``deepseek``, etc.); custom channel aliases should not accidentally
+    inherit those legacy secrets.
     """
-    normalized_name = canonicalize_llm_channel_protocol(channel_name)
+    # For known provider channel names, allow protocol override to shift legacy
+    # fallback behavior; keep custom aliases isolated.
+    normalized_channel = canonicalize_llm_channel_protocol(channel_name)
+    normalized_protocol = canonicalize_llm_channel_protocol(resolved_protocol) if resolved_protocol else None
+    effective_name = (
+        normalized_protocol
+        if resolved_protocol and normalized_channel in _MANAGED_LITELLM_KEY_PROVIDERS
+        else normalized_channel
+    )
+    normalized_name = effective_name
     raw_name = (channel_name or "").strip().lower()
     parsed_url = urlparse(base_url or "")
     host = (parsed_url.hostname or "").lower()
@@ -239,6 +256,34 @@ def resolve_news_window_days(news_max_age_days: int, news_strategy_profile: Opti
     return max(1, min(max(1, int(news_max_age_days)), profile_days))
 
 
+def infer_llm_protocol_from_base_url(base_url: Optional[str]) -> str:
+    """Infer known provider protocol from official base URL host."""
+    parsed = urlparse(base_url or "")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return ""
+
+    if host in {"127.0.0.1", "localhost", "0.0.0.0"}:
+        # Keep local server default behavior unchanged.
+        return "openai"
+
+    if _is_provider_host(host, "aihubmix.com"):
+        return "openai"
+    if _is_provider_host(host, "deepseek.com"):
+        return "deepseek"
+    if (
+        _is_provider_host(host, "generativelanguage.googleapis.com")
+        or _is_provider_host(host, "aiplatform.googleapis.com")
+    ):
+        return "gemini"
+    if _is_provider_host(host, "anthropic.com"):
+        return "anthropic"
+    if _is_provider_host(host, "openai.com"):
+        return "openai"
+
+    return "openai"
+
+
 def canonicalize_llm_channel_protocol(value: Optional[str]) -> str:
     """Normalize a protocol label into a LiteLLM provider identifier."""
     candidate = (value or "").strip().lower().replace("-", "_")
@@ -279,11 +324,10 @@ def resolve_llm_channel_protocol(
             return name_protocol
 
     if base_url:
-        parsed = urlparse(base_url)
-        if parsed.hostname in {"127.0.0.1", "localhost", "0.0.0.0"}:
-            # Default to openai for local servers (vLLM, LM Studio, LocalAI, etc.).
-            # Ollama users should set PROTOCOL=ollama explicitly or name the channel "ollama".
-            return "openai"
+        inferred_protocol = infer_llm_protocol_from_base_url(base_url)
+        if inferred_protocol:
+            return inferred_protocol
+        # Fallback for unusual hostnames that still rely on OpenAI-compatible paths.
         return "openai"
 
     return ""
@@ -1585,7 +1629,7 @@ class Config:
             if not api_keys and channel_allows_empty_api_key(protocol, base_url):
                 api_keys = [""]
             if not api_keys:
-                api_keys, legacy_source = resolve_channel_legacy_api_keys(ch_name, base_url)
+                api_keys, legacy_source = resolve_channel_legacy_api_keys(ch_name, base_url, resolved_protocol=protocol)
                 if api_keys and legacy_source:
                     _logger.info(
                         "LLM channel '%s': using legacy API key fallback from %s",

@@ -119,11 +119,14 @@ LITELLM_MODEL=ollama/qwen3:8b
 - 如果你通过 OpenAI Compatible 渠道接 MiniMax，请在渠道模型里直接填写 `minimax/<模型名>`，例如 `minimax/MiniMax-M1`。
 - Web 设置页里的主模型、Agent 主模型、Fallback、Vision 下拉会保留这个值原样展示，不会再错误改写成 `openai/minimax/<模型名>`。
 
-> **致命避坑说明**：如果你启用了 `LLM_CHANNELS`，那么你直接写在外面的 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY` 将**全部失效（系统一律无视）**！二者**选其一即可**，千万不要既写了新手模式又写了渠道模式结果产生冲突。
+> **关键说明**：当你启用 `LLM_CHANNELS` 后，系统会优先按**渠道模式**运行；对常见 provider 渠道（如 `deepseek`、`aihubmix`、`openai`、`gemini`、`anthropic`）在未配置 `LLM_{NAME}_API_KEY(S)` 时，会按渠道名/官方域名安全回退到对应 legacy Secret（如 `DEEPSEEK_API_KEY(S)`、`AIHUBMIX_KEY / OPENAI_API_KEY(S)`、`GEMINI_API_KEY(S)`、`ANTHROPIC_API_KEY(S)`）。  
+如自定义渠道名的 `LLM_{NAME}_BASE_URL` 指向官方 provider HTTPS host（如 `api.openai.com`、`api.deepseek.com`、`api.aihubmix.com`、`api.anthropic.com`、`generativelanguage.googleapis.com`、`aiplatform.googleapis.com`），同样会按 host 做 legacy Secret 回退；否则建议走高级 YAML 配置：提交实体 YAML 文件时可仅设置 `LITELLM_CONFIG`；未提交文件时需同时加 `LITELLM_CONFIG_YAML`。
 
 > **GitHub Actions 兼容说明**：渠道模式仍优先于 legacy 模式，但常见 provider 渠道在缺少 `LLM_{NAME}_API_KEY(S)` 时，会按渠道名/官方域名安全回退读取已有 Secrets：`deepseek -> DEEPSEEK_API_KEY(S)`、`aihubmix -> AIHUBMIX_KEY / OPENAI_API_KEY(S)`、`openai -> OPENAI_API_KEY(S)`、`gemini/vertex -> GEMINI_API_KEY(S)`、`anthropic/claude -> ANTHROPIC_API_KEY(S)`。这意味着你可以继续使用默认 `.env` 中的非敏感渠道结构，把真实 Key 放在 GitHub Secrets 里，而不用把真实 `LLM_DEEPSEEK_API_KEY`、`LLM_AIHUBMIX_API_KEY` 写进仓库配置。
 >
-> **边界说明**：这个回退只覆盖常见 provider 渠道名；像 `my_proxy`、`corp_gateway` 这类自定义渠道名在 GitHub Actions 中仍建议改用 `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`，避免 secret 名与渠道名无法自动对齐。
+> **边界说明**：这个回退覆盖两类场景：一是内置 provider 渠道名，二是任意通道名只要 `LLM_<通道名>_BASE_URL` 命中官方 provider host（并且是 HTTPS）也会触发 host-based 回退。像 `proxy.example.com`、`my_proxy` 这类非官方主机名（例如企业自建转发、中转聚合、未公开域名）不会按渠道名映射 legacy Secret，建议走高级 YAML 模式：
+> - 若你已提交实体 `litellm_config.yaml` 文件：`LITELLM_CONFIG` 只需指向该文件路径（例如 `./litellm_config.yaml`）。
+> - 若你不提交实体文件：`LITELLM_CONFIG` 需提供写入路径，且同时补 `LITELLM_CONFIG_YAML`（可放在 Secrets/Variables），由 workflow 在运行时写入 YAML 内容。
 
 ---
 
@@ -181,7 +184,9 @@ LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,anthropic/claude-3-5-sonnet
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`
 
-这样无需改 workflow，也无需把真实 `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` 写进默认 `.env`。若你使用的是自定义渠道名，则请改用下面的 YAML 高级配置。
+这样无需改 workflow，也无需把真实 `LLM_DEEPSEEK_API_KEY` / `LLM_AIHUBMIX_API_KEY` 写进默认 `.env`。若你的自定义渠道名使用官方 provider 的 HTTPS host，可按 host 回退到对应 legacy Secret；若使用自定义中转 host（如 `myproxy.example.com`）请改用下面的 YAML 高级配置，按实际场景选一：
+- 已提交 `litellm_config.yaml` 到仓库：仅配置 `LITELLM_CONFIG=./litellm_config.yaml`。
+- 未提交文件：配置 `LITELLM_CONFIG=./litellm_config.yaml`（路径）与 `LITELLM_CONFIG_YAML`（YAML 内容，来自 Secrets/Variables）。
 
 1. `Settings` → `Secrets and variables` → `Actions` → `Secret`标签页下的`New repository secret` 或者 `Variables`标签页下的`New repository variable`
 
@@ -189,9 +194,9 @@ LITELLM_FALLBACK_MODELS=openai/gpt-4o-mini,anthropic/claude-3-5-sonnet
 
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
-| `LITELLM_CONFIG` | 高级模型路由配置文件路径，通常配置 `./litellm_config.yaml` | 必填 |
+| `LITELLM_CONFIG` | 高级模型路由配置文件路径（如 `./litellm_config.yaml`） | 必填 |
+| `LITELLM_CONFIG_YAML` | 可选：如未提交实体配置文件，可在 `Actions` Secret/Variable 中放 YAML 内容；workflow 会写入 `LITELLM_CONFIG` 路径 | 可选 |
 | `LITELLM_MODEL` | 默认主模型名称或路由别名 | 必填 |
-| `LITELLM_CONFIG_YAML` | 存放 YAML 配置文件内容，可不在仓库中提交实体文件 | 可选 |
 | `LITELLM_API_KEY` | 用于存储API Key，可在配置文件中引用（环境变量引用方式）。由于GitHub Actions必须要指定导入的环境变量，因此你不能像本地运行模式那样自由命名环境变量 | 可选，必须配置到repository secret中 |
 | `ANTHROPIC_API_KEY` | 如果要多个API Key，这个变量名称也能拿来用 | 可选，必须配置到repository secret中 |
 | `OPENAI_API_KEY` | 同上，可以用来存储API Key | 可选，必须配置到repository secret中 |
@@ -232,7 +237,7 @@ VISION_PROVIDER_PRIORITY=gemini,anthropic,openai
 | 遇到了什么诡异报错？ | 罪魁祸首可能是啥？ | 该怎么收拾它？ |
 |----------------------|----------------------|------------------|
 | **界面提示主模型未配置** | 系统不知道你到底想用哪家的哪个模型 | 在 `.env` 中写上一句明白话：`LITELLM_MODEL=provider/你的模型名`。比如 `openai/gpt-4o-mini` |
-| **我写了好几家的Key，为什么死活只有一个生效？修改还没用？** | 大概率是模式混用，或渠道名和 Secret 名没对齐。 | 本地 / Docker 请优先直接写 `LLM_{NAME}_API_KEY(S)`；GitHub Actions 下，`deepseek` / `aihubmix` / `openai` / `gemini` / `anthropic` 等常见渠道可复用对应 legacy Secrets；自定义渠道请改用 `LITELLM_CONFIG` + `LITELLM_CONFIG_YAML`。 |
+| **我写了好几家的Key，为什么死活只有一个生效？修改还没用？** | 大概率是模式混用，或渠道名和 Secret 名没对齐。 | 本地 / Docker 请优先直接写 `LLM_{NAME}_API_KEY(S)`；GitHub Actions 下，`deepseek` / `aihubmix` / `openai` / `gemini` / `anthropic` 等常见渠道可复用对应 legacy Secrets，另外自定义渠道若 `LLM_<NAME>_BASE_URL` 命中官方 provider HTTPS host 也可按 host 回退。若自定义渠道使用非官方 host，请走高级 YAML 配置：提交 `litellm_config.yaml` 时只配 `LITELLM_CONFIG`，不提交时再补 `LITELLM_CONFIG_YAML`。 |
 | **错误码报 400 或 401 或 Invalid API Key** | API Key 填错、少复制了一截、账号充值没到账、或者模型名字敲错（极度常见）。 | 1. 检查复制的 Key 前后是否有误填空格。<br> 2. 检查 Base URL 最后是不是少了一个 `/v1`。<br> 3. 检查模型名是否少写了 `openai/` 之类的前缀！ |
 | **转圈转不停，最后报 Timeout / ConnectionRefused 等** | 1. 在国内使用国外原版（像 Google、OpenAI），没开代理被墙了。<br>2. 你买的云服务器压根不能出境。 | 非常推荐使用**国内官方**（如DeepSeek、阿里）或者各种**兼容 OpenAI 的聚合中转接口**。因为中转站把网络问题帮你解决好了。 |
 | **Ollama 报 404、`Could not get model info` 或 `api/generate/api/show`** | 误用 `OPENAI_BASE_URL` 配置 Ollama，系统会错误拼接 URL | 改用 `OLLAMA_API_BASE=http://localhost:11434` 或渠道模式（`LLM_CHANNELS=ollama` + `LLM_OLLAMA_BASE_URL`） |
