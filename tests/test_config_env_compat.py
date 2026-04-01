@@ -402,5 +402,85 @@ class ConfigEnvCompatibilityTestCase(unittest.TestCase):
         self.assertEqual(emails, ["user@example.com"])
 
 
+class StockRecommendationConfigTestCase(unittest.TestCase):
+    """Tests for stock_recommendation_* env var parsing."""
+
+    def tearDown(self):
+        Config.reset_instance()
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_defaults(self, _mock_yaml, _mock_setup_env):
+        with patch.dict(os.environ, {"STOCK_LIST": "600519"}, clear=True):
+            config = Config._load_from_env()
+        self.assertFalse(config.stock_recommendation_enabled)
+        self.assertEqual(config.stock_recommendation_markets, "cn")
+        self.assertEqual(config.stock_recommendation_count, 5)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_enabled_flag(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_ENABLED": "true"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertTrue(config.stock_recommendation_enabled)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_markets_all(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_MARKETS": "all"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_markets, "all")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_markets_comma_separated(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_MARKETS": "cn,us"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_markets, "cn,us")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_count_valid(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_COUNT": "8"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_count, 8)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_count_below_minimum_clamped(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_COUNT": "0"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_count, 1)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_count_above_maximum_clamped(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_COUNT": "99"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_count, 10)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_count_invalid_falls_back_to_default(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_COUNT": "not_a_number"}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_count, 5)
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_stock_recommendation_markets_empty_falls_back_to_default(self, _mock_yaml, _mock_setup_env):
+        env = {"STOCK_LIST": "600519", "STOCK_RECOMMENDATION_MARKETS": "   "}
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+        self.assertEqual(config.stock_recommendation_markets, "cn")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -106,7 +106,6 @@ class StockRecommender:
             markets: 要覆盖的市场列表，合法值 ['cn','hk','us']；None 时默认 ['cn']
             recommendation_count: 每市场推荐股票数量
         """
-        self.config = get_config()
         self.search_service = search_service
         self.analyzer = analyzer
         self.recommendation_count = max(1, min(10, recommendation_count))
@@ -133,11 +132,21 @@ class StockRecommender:
         queries = _SEARCH_QUERIES.get(market, [])
         snippets: List[str] = []
 
+        # Use English market names for US/HK to avoid SearchService treating them
+        # as Chinese stock queries (prefer_chinese=True), which would bias search
+        # results toward Chinese-language content for English-language queries.
+        if market == "us":
+            stock_name_for_search = "US market"
+        elif market == "hk":
+            stock_name_for_search = "HK market"
+        else:
+            stock_name_for_search = _MARKET_NAMES.get(market, market)
+
         for query in queries:
             try:
                 response = self.search_service.search_stock_news(
                     stock_code=f"market_{market}",
-                    stock_name=_MARKET_NAMES.get(market, market),
+                    stock_name=stock_name_for_search,
                     max_results=4,
                     focus_keywords=query.split(),
                 )

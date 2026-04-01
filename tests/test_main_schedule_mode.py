@@ -8,7 +8,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from tests.litellm_stub import ensure_litellm_stub
 
@@ -416,6 +416,127 @@ class MainScheduleModeTestCase(unittest.TestCase):
         # Cleanup: reset state
         main._LazyPipelineDescriptor._resolved = None
         main._env_bootstrapped = False
+
+
+class StockRecommendMainTestCase(MainScheduleModeTestCase):
+    """Regression tests for stock recommendation paths in run_full_analysis and --stock-recommend."""
+
+    def setUp(self):
+        super().setUp()
+        import main as main_mod
+        main_mod._LazyPipelineDescriptor._resolved = None
+        main_mod._env_bootstrapped = False
+
+    def tearDown(self):
+        import main as main_mod
+        main_mod._LazyPipelineDescriptor._resolved = None
+        main_mod._env_bootstrapped = False
+        super().tearDown()
+
+    def _make_args(self, **overrides):
+        base = super()._make_args()
+        d = vars(base)
+        d.setdefault('stock_recommend', False)
+        d.setdefault('no_stock_recommend', False)
+        d.update(overrides)
+        return SimpleNamespace(**d)
+
+    def _make_config(self, **overrides):
+        defaults = {
+            "market_review_enabled": False,
+            "trading_day_check_enabled": False,
+            "backtest_enabled": False,
+            "feishu_doc_enabled": False,
+            "stock_recommendation_enabled": False,
+        }
+        defaults.update(overrides)
+        return super()._make_config(**defaults)
+
+    # Exclude this inherited test — it's already covered in MainScheduleModeTestCase
+    # and the per-class setUp/tearDown reset causes ordering sensitivity here.
+    test_lazy_pipeline_triggers_env_bootstrap = None
+
+    def test_run_full_analysis_calls_stock_recommendation_when_enabled(self):
+        """STOCK_RECOMMENDATION_ENABLED=true causes run_stock_recommendation to be called."""
+        args = self._make_args(no_notify=True)
+        config = self._make_config(stock_recommendation_enabled=True)
+
+        with patch("src.core.stock_recommendation.run_stock_recommendation") as mock_rec, \
+             patch("src.core.pipeline.StockAnalysisPipeline") as _mock_pipeline:
+            mock_pipeline_instance = _mock_pipeline.return_value
+            mock_pipeline_instance.run.return_value = []
+            mock_pipeline_instance.notifier = MagicMock()
+            mock_pipeline_instance.analyzer = None
+            mock_pipeline_instance.search_service = None
+
+            import main as main_mod
+            main_mod.run_full_analysis(config, args, [])
+
+        mock_rec.assert_called_once()
+
+    def test_run_full_analysis_skips_stock_recommendation_when_disabled(self):
+        """STOCK_RECOMMENDATION_ENABLED=false means run_stock_recommendation is NOT called."""
+        args = self._make_args(no_notify=True)
+        config = self._make_config(stock_recommendation_enabled=False)
+
+        with patch("src.core.stock_recommendation.run_stock_recommendation") as mock_rec, \
+             patch("src.core.pipeline.StockAnalysisPipeline") as _mock_pipeline:
+            mock_pipeline_instance = _mock_pipeline.return_value
+            mock_pipeline_instance.run.return_value = []
+            mock_pipeline_instance.notifier = MagicMock()
+            mock_pipeline_instance.analyzer = None
+            mock_pipeline_instance.search_service = None
+
+            import main as main_mod
+            main_mod.run_full_analysis(config, args, [])
+
+        mock_rec.assert_not_called()
+
+    def test_run_full_analysis_no_stock_recommend_flag_overrides_config(self):
+        """--no-stock-recommend CLI flag suppresses recommendation even if config enables it."""
+        args = self._make_args(no_notify=True, no_stock_recommend=True)
+        config = self._make_config(stock_recommendation_enabled=True)
+
+        with patch("src.core.stock_recommendation.run_stock_recommendation") as mock_rec, \
+             patch("src.core.pipeline.StockAnalysisPipeline") as _mock_pipeline:
+            mock_pipeline_instance = _mock_pipeline.return_value
+            mock_pipeline_instance.run.return_value = []
+            mock_pipeline_instance.notifier = MagicMock()
+            mock_pipeline_instance.analyzer = None
+            mock_pipeline_instance.search_service = None
+
+            import main as main_mod
+            main_mod.run_full_analysis(config, args, [])
+
+        mock_rec.assert_not_called()
+
+    def test_stock_recommend_standalone_no_llm_no_search_exits_cleanly(self):
+        """--stock-recommend mode with no LLM / no search exits without exception."""
+        from types import SimpleNamespace
+        args = SimpleNamespace(
+            debug=False, stocks=None, webui=False, webui_only=False,
+            serve=False, serve_only=False, host="0.0.0.0", port=8000,
+            backtest=False, market_review=False, schedule=False,
+            no_run_immediately=False, no_notify=True, no_market_review=False,
+            dry_run=False, workers=1, force_run=False, single_notify=False,
+            no_context_snapshot=False, stock_recommend=True, no_stock_recommend=False,
+        )
+        config = self._make_config(gemini_api_key=None)
+
+        mock_analyzer = MagicMock()
+        mock_analyzer.is_available.return_value = False
+
+        with patch("main.get_config", return_value=config), \
+             patch("main.parse_arguments", return_value=args), \
+             patch("main.setup_logging"), \
+             patch("src.analyzer.GeminiAnalyzer", return_value=mock_analyzer), \
+             patch("src.core.stock_recommendation.run_stock_recommendation") as mock_rec, \
+             patch.object(config, "has_search_capability_enabled", return_value=False, create=True):
+            import main as main_mod
+            exit_code = main_mod.main()
+
+        self.assertEqual(exit_code, 0)
+        mock_rec.assert_called_once()
 
 
 if __name__ == "__main__":
