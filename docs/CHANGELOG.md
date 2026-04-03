@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] 修复 5 位裸数字港股代码（如 '02319' 蒙牛乳业）因不在旧 STOCK_NAME_MAP 白名单中被误补全为 A 股代码的回归问题：`normalize_stock_code` 现在对所有 5 位纯数字代码保持"纯语法"规范化，不再做市场推断或自动补零，由上层 DataFetcherManager / 管线在首轮查询无数据时决定是否以补零 A 股代码重试；如需明确指定港股，请使用 'HK02319' 或 '02319.HK' 格式。
 - [修复] 修复 5 位裸数字代码误路由：`normalize_stock_code` 保持纯语法处理，不再在规范化层自动补零；`DataFetcherManager.get_daily_data` 先按港股通道取数，若 5 位裸码在首轮仍无数据，再尝试补零后按 6 位 A 股码重试（如 02714→002714）。
 - [修复] 修复 5 位裸数字代码误路由（fixes #946）：`normalize_stock_code` 仅做纯语法清洗；`DataFetcherManager.get_daily_data` 对 5 位裸码只在该轮所有数据源均返回空数据时才补零为 A 股候选码后重试（如 `02714`→`002714`），避免真实港股（如 `02319`）被误路由。
+- [修复] 修复 5 位裸数字代码误路由（fixes #946）：`normalize_stock_code` 仅做纯语法清洗；`DataFetcherManager.get_daily_data` 不再对 `02714`、`02319` 这类 5 位裸码静默猜测市场并补零重试，而是在无数据时返回明确提示，要求用户改用 `002714` 这类 6 位 A 股代码或 `HK02714` / `02714.HK` 这类显式港股格式。
 
 ## [3.12.0] - 2026-04-01
 

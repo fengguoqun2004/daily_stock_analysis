@@ -7,7 +7,7 @@ HK stock path and returned wrong data (蒙牛乳业 HK:02319).
 
 Covered acceptance criteria:
 1. '002714' → '002714'  (6-digit A-share, unchanged)
-2. '02714'  → '02714'   (5-digit, kept as-is; manager 在港股路径无数据时可尝试补零到 '002714')
+2. '02714'  → '02714'   (5-digit, kept as-is; no silent market guessing)
 3. '00700'  → '00700'   (known HK, kept as-is)
 4. 'HK02714' → 'HK02714' (explicit HK prefix, stays HK)
 5. '02714.HK' → 'HK02714' (explicit HK suffix, stays HK)
@@ -26,7 +26,7 @@ if "json_repair" not in sys.modules:
     sys.modules["json_repair"] = MagicMock()
 
 try:
-    from data_provider.base import DataFetchError, DataFetcherManager, normalize_stock_code, _KNOWN_HK_BARE_CODES
+    from data_provider.base import DataFetchError, DataFetcherManager, normalize_stock_code
     _IMPORTS_OK = True
     _IMPORT_ERROR = ""
 except ImportError as e:
@@ -64,7 +64,7 @@ class _MockDailyFetcher:
 @unittest.skipIf(not _IMPORTS_OK, f"imports failed: {_IMPORT_ERROR}")
 class TestFiveDigitAmbiguity(unittest.TestCase):
     """
-    Tests for the bare 5-digit code auto-pad heuristic in normalize_stock_code.
+    Tests for the bare 5-digit code ambiguity handling.
     """
 
     # --- Acceptance criteria ---
@@ -128,34 +128,21 @@ class TestFiveDigitAmbiguity(unittest.TestCase):
         must NOT be padded to '002319' (which would be a wrong A-share code)."""
         self.assertEqual(normalize_stock_code("02319"), "02319")
 
-    # --- _KNOWN_HK_BARE_CODES sanity check ---
+    def test_manager_returns_clear_error_for_ambiguous_bare_code(self):
+        """全空结果时不应静默补零改查其他市场，而应返回明确提示。"""
 
-    def test_known_hk_bare_codes_contains_tencent(self):
-        """'00700' must be in the HK whitelist."""
-        self.assertIn("00700", _KNOWN_HK_BARE_CODES)
-
-    def test_known_hk_bare_codes_contains_02714(self):
-        """'02714' must now be in the HK whitelist (all 5-digit codes are protected)."""
-        self.assertIn("02714", _KNOWN_HK_BARE_CODES)
-
-    def test_known_hk_bare_codes_contains_02319(self):
-        """'02319' (蒙牛乳业, not in old STOCK_NAME_MAP) must be in the HK whitelist."""
-        self.assertIn("02319", _KNOWN_HK_BARE_CODES)
-
-    def test_manager_fallback_to_ashare_after_hk_empty(self):
-        """港股路径无数据时会补零重试 A 股候选码。"""
-
-        def result_provider(stock_code: str, **_):
-            if stock_code == "002714":
-                return _sample_df()
-            return None
-
-        fetcher = _MockDailyFetcher("AkshareFetcher", 1, result_provider)
+        fetcher = _MockDailyFetcher("AkshareFetcher", 1, lambda **_: None)
         manager = DataFetcherManager(fetchers=[fetcher])
-        df, source = manager.get_daily_data("02714", start_date="2026-03-01", end_date="2026-03-02")
-        self.assertEqual(source, "AkshareFetcher")
-        self.assertEqual(fetcher.calls, ["02714", "002714"])
-        self.assertEqual(len(df), 2)
+
+        with self.assertRaises(DataFetchError) as context:
+            manager.get_daily_data("02714", start_date="2026-03-01", end_date="2026-03-02")
+
+        self.assertEqual(fetcher.calls, ["02714"])
+        message = str(context.exception)
+        self.assertIn("02714", message)
+        self.assertIn("002714", message)
+        self.assertIn("HK02714", message)
+        self.assertIn("02714.HK", message)
 
     def test_manager_no_fallback_when_exception_occurs(self):
         """出现异常时不应触发 5 位裸码补零兜底。"""
@@ -168,6 +155,18 @@ class TestFiveDigitAmbiguity(unittest.TestCase):
         with self.assertRaises(DataFetchError):
             manager.get_daily_data("02319", start_date="2026-03-01", end_date="2026-03-02")
         self.assertEqual(fetcher.calls, ["02319"])
+
+    def test_manager_does_not_retry_padded_for_real_hk_bare_code(self):
+        """真实港股裸码在全空结果下也不应被补零改查成 A 股。"""
+
+        fetcher = _MockDailyFetcher("AkshareFetcher", 1, lambda **_: None)
+        manager = DataFetcherManager(fetchers=[fetcher])
+
+        with self.assertRaises(DataFetchError) as context:
+            manager.get_daily_data("02319", start_date="2026-03-01", end_date="2026-03-02")
+
+        self.assertEqual(fetcher.calls, ["02319"])
+        self.assertIn("002319", str(context.exception))
 
     def test_manager_does_not_retry_padded_for_explicit_hk_code(self):
         """显式 HK 代码不会触发 6 位补零兜底。"""

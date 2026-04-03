@@ -15,7 +15,6 @@
 """
 
 import logging
-import re
 import random
 import time
 from threading import BoundedSemaphore, RLock, Thread
@@ -63,15 +62,6 @@ def summarize_exception(exc: Exception) -> Tuple[str, str]:
     return error_type, " ".join(message.split())
 
 
-_normalize_logger = logging.getLogger(__name__ + ".normalize")
-
-# Bare 5-digit HK-style numeric codes.
-# Any 5-digit numeric code is treated as a potential HK bare code and is
-# protected from the A-share auto-pad heuristic to avoid misclassifying
-# legitimate HK tickers (e.g. '02319') as A-share symbols.
-_KNOWN_HK_BARE_CODES: frozenset = frozenset(f"{i:05d}" for i in range(1, 100000))
-
-
 def normalize_stock_code(stock_code: str) -> str:
     """
     Normalize stock code by stripping exchange prefixes/suffixes.
@@ -88,15 +78,15 @@ def normalize_stock_code(stock_code: str) -> str:
     - 'HK00700'     -> 'HK00700'  (keep HK prefix for HK stocks)
     - '1810.HK'     -> 'HK01810'  (normalize HK suffix to canonical prefix form)
     - 'AAPL'        -> 'AAPL'     (keep US stock ticker as-is)
-    - '02714'       -> '02714'    (ambiguous 5-digit: kept as-is, upstream decides routing)
+    - '02714'       -> '02714'    (ambiguous 5-digit: kept as-is, caller decides intent)
 
     Bare 5-digit codes starting with '0' are ambiguous: they could be HK stocks
     (e.g. '00700' for Tencent, '02319' for China Mengniu) or a mistyped A-share code
     missing one leading zero (e.g. '02714' intended as '002714' 牧原股份).
     To avoid misclassifying legitimate HK codes, normalization is kept purely syntactic:
-    5-digit codes are left unchanged and upper-layer routing (DataFetcherManager/pipeline)
-    may retry with a padded A-share code when the HK lookup returns empty.
-    For unambiguous routing always use an explicit prefix/suffix: 'HK02714' or '02714.HK'.
+    5-digit codes are left unchanged and callers should use an explicit market hint when
+    the intent matters. For unambiguous routing always use '002714' for A-share or
+    'HK02714' / '02714.HK' for HK.
 
     This function is applied at the DataProviderManager layer so that
     all individual fetchers receive a clean 6-digit code (for A-shares/ETFs).
@@ -135,8 +125,7 @@ def normalize_stock_code(stock_code: str) -> str:
     # 为避免在规范化阶段误判市场，像 '02319' 这类 5 位纯数字且以 '0' 开头的代码
     # 在语法上既可能是港股，也可能是 A 股前面少写了一位。这里保持"纯语法"规范化：
     # - 不对这类代码做自动补全或市场推断；
-    # - 直接原样返回，由上层 DataFetcherManager / 管线在首轮查询无数据时决定是否
-    #   以补零后的 A 股代码重试。
+    # - 直接原样返回，由调用方显式指定 A 股 6 位代码或 HK 前后缀。
 
     return code
 
@@ -1013,17 +1002,15 @@ class DataFetcherManager:
                 # 继续尝试下一个数据源
                 continue
         
-        # 5-digit bare code starting with '0': when the HK lookup returns empty,
-        # retry with a leading-zero padded A-share candidate (e.g. '02714' → '002714').
-        # Only triggers for plain 5-digit codes; explicit HK prefixes (e.g. 'HK02714')
-        # are already normalized out of this pattern.
-        if all_fetchers_no_data and re.match(r"^0\d{4}$", stock_code):
-            padded = "0" + stock_code
-            logger.info("[5位裸码兜底] %s 全部数据源无数据，尝试补零为 A 股候选码 %s", stock_code, padded)
-            try:
-                return self.get_daily_data(padded, start_date=start_date, end_date=end_date, days=days)
-            except DataFetchError:
-                pass  # fall through to original error
+        # 5-digit bare codes such as 02714 are ambiguous between HK tickers and
+        # zero-padded A-share symbols. Do not silently guess the market on empty
+        # results, otherwise real HK tickers like 02319 can be rewritten to a
+        # different A-share code.
+        if all_fetchers_no_data and stock_code.isdigit() and len(stock_code) == 5 and stock_code.startswith("0"):
+            raise DataFetchError(
+                f"未找到股票代码 {stock_code} 的数据。5 位裸数字代码存在市场歧义："
+                f"若为 A 股请使用 00{stock_code[1:]}，若为港股请使用 HK{stock_code} 或 {stock_code}.HK。"
+            )
 
         # 所有数据源都失败
         error_summary = f"所有数据源获取 {stock_code} 失败:\n" + "\n".join(errors)
