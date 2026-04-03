@@ -1928,6 +1928,8 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
+    _MAINLAND_MARKET_SUFFIXES = {"SH", "SZ", "SS", "BJ"}
+    _MAINLAND_MARKET_PREFIXES = ("SH", "SZ", "BJ")
 
     def __init__(
         self,
@@ -2049,6 +2051,27 @@ class SearchService:
         return bool(value and cls._CHINESE_TEXT_RE.search(value))
 
     @classmethod
+    def _normalize_mainland_stock_code(cls, stock_code: str) -> str:
+        """Normalize common mainland exchange-qualified codes to their 6-digit form."""
+        code = (stock_code or "").strip()
+        if not code:
+            return ""
+
+        upper = code.upper()
+        if "." in upper:
+            base, suffix = upper.rsplit(".", 1)
+            if suffix in cls._MAINLAND_MARKET_SUFFIXES and base.isdigit() and len(base) == 6:
+                return base
+
+        for prefix in cls._MAINLAND_MARKET_PREFIXES:
+            if upper.startswith(prefix):
+                candidate = upper[len(prefix):]
+                if candidate.isdigit() and len(candidate) == 6:
+                    return candidate
+
+        return code
+
+    @classmethod
     def _is_us_stock(cls, stock_code: str) -> bool:
         """判断是否为美股/美股指数代码。"""
         code = (stock_code or "").strip().upper()
@@ -2064,7 +2087,8 @@ class SearchService:
         """A 股或中文名称/关键词场景下优先中文资讯。
 
         Only returns True when there is a positive Chinese signal:
-        Chinese characters in keywords/stock_name, or a 6-digit A-stock code.
+        Chinese characters in keywords/stock_name, or a 6-digit mainland stock code
+        (including common SH/SZ/BJ prefixes or suffixes).
         Avoids false positives for non-foreign but English contexts like
         ``stock_code="market", stock_name="US market"``.
         """
@@ -2072,8 +2096,8 @@ class SearchService:
             return True
         if cls._contains_chinese_text(stock_name):
             return True
-        # Positive A-stock identification: 6-digit numeric codes (e.g. 600519)
-        code = (stock_code or "").strip()
+        # Positive mainland-stock identification: 6-digit numeric codes (e.g. 600519)
+        code = cls._normalize_mainland_stock_code(stock_code)
         return code.isdigit() and len(code) == 6
 
     @classmethod

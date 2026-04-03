@@ -186,6 +186,43 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         p1.search.assert_called_once()
         p2.search.assert_called_once()
 
+    def test_search_stock_news_exchange_qualified_a_share_still_prefers_chinese(self) -> None:
+        """Common SH/SZ-prefixed or suffixed A-share codes should keep Chinese preference."""
+        fresh = datetime.now().date().isoformat()
+
+        for stock_code in ("SH600519", "000001.SZ"):
+            with self.subTest(stock_code=stock_code):
+                service = SearchService(
+                    bocha_keys=["dummy_key"],
+                    searxng_public_instances_enabled=False,
+                    news_max_age_days=3,
+                    news_strategy_profile="short",
+                )
+
+                p1 = SimpleNamespace(
+                    is_available=True,
+                    name="P1",
+                    search=MagicMock(
+                        return_value=_response(
+                            [
+                                _result("English headline", fresh),
+                                _result("Another English story", fresh),
+                            ]
+                        )
+                    ),
+                )
+                p2 = SimpleNamespace(
+                    is_available=True,
+                    name="P2",
+                    search=MagicMock(return_value=_response([_result("中文资讯", fresh)])),
+                )
+                service._providers = [p1, p2]
+
+                resp = service.search_stock_news(stock_code, "Kweichow Moutai", max_results=3)
+                self.assertEqual([r.title for r in resp.results], ["中文资讯"])
+                p1.search.assert_called_once()
+                p2.search.assert_called_once()
+
     def test_search_stock_news_prioritizes_chinese_items_within_mixed_results(self) -> None:
         """Chinese items should be ordered ahead of English items in mixed batches."""
         fresh = datetime.now().date().isoformat()
@@ -285,6 +322,8 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
 
         for stock_code, stock_name, expected_lang, expected_country, title, description in (
             ("600519", "贵州茅台", "zh-hans", "CN", "中文资讯", "中文摘要"),
+            ("SH600519", "Kweichow Moutai", "zh-hans", "CN", "中文资讯", "中文摘要"),
+            ("000001.SZ", "Ping An Bank", "zh-hans", "CN", "中文资讯", "中文摘要"),
             ("AAPL", "Apple", "en", "US", "Apple earnings beat", "English summary"),
         ):
             with self.subTest(stock_code=stock_code):
