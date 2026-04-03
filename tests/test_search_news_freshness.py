@@ -190,7 +190,14 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         """Common SH/SZ-prefixed or suffixed A-share codes should keep Chinese preference."""
         fresh = datetime.now().date().isoformat()
 
-        for stock_code in ("SH600519", "000001.SZ"):
+        for stock_code in (
+            "SH600519",
+            "000001.SZ",
+            "SHSE.600519",
+            "SZSE.000001",
+            "600519.XSHG",
+            "000001.XSHE",
+        ):
             with self.subTest(stock_code=stock_code):
                 service = SearchService(
                     bocha_keys=["dummy_key"],
@@ -324,6 +331,8 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
             ("600519", "贵州茅台", "zh-hans", "CN", "中文资讯", "中文摘要"),
             ("SH600519", "Kweichow Moutai", "zh-hans", "CN", "中文资讯", "中文摘要"),
             ("000001.SZ", "Ping An Bank", "zh-hans", "CN", "中文资讯", "中文摘要"),
+            ("SHSE.600519", "Kweichow Moutai", "zh-hans", "CN", "中文资讯", "中文摘要"),
+            ("000001.XSHE", "Ping An Bank", "zh-hans", "CN", "中文资讯", "中文摘要"),
             ("AAPL", "Apple", "en", "US", "Apple earnings beat", "English summary"),
         ):
             with self.subTest(stock_code=stock_code):

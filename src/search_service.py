@@ -1930,6 +1930,7 @@ class SearchService:
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
     _MAINLAND_MARKET_SUFFIXES = {"SH", "SZ", "SS", "BJ"}
     _MAINLAND_MARKET_PREFIXES = ("SH", "SZ", "BJ")
+    _MAINLAND_MARKET_TAGS = {"SHSE", "SZSE", "XSHG", "XSHE", "BJSE"}
 
     def __init__(
         self,
@@ -2062,10 +2063,21 @@ class SearchService:
             base, suffix = upper.rsplit(".", 1)
             if suffix in cls._MAINLAND_MARKET_SUFFIXES and base.isdigit() and len(base) == 6:
                 return base
+            if base in cls._MAINLAND_MARKET_TAGS and suffix.isdigit() and len(suffix) == 6:
+                return suffix
+            if suffix in cls._MAINLAND_MARKET_TAGS and base.isdigit() and len(base) == 6:
+                return base
 
         for prefix in cls._MAINLAND_MARKET_PREFIXES:
             if upper.startswith(prefix):
                 candidate = upper[len(prefix):]
+                if candidate.isdigit() and len(candidate) == 6:
+                    return candidate
+
+        for prefix in cls._MAINLAND_MARKET_TAGS:
+            tagged_prefix = f"{prefix}."
+            if upper.startswith(tagged_prefix):
+                candidate = upper[len(tagged_prefix):]
                 if candidate.isdigit() and len(candidate) == 6:
                     return candidate
 
