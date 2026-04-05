@@ -1,8 +1,8 @@
 # English Documentation Index
 
 > All English-language documentation for the AI Stock Analysis System.
-> 
-> For Chinese docs, see the [main README](../README.md).
+>
+> For Chinese docs, see the [Chinese documentation index](INDEX.md).
 
 ---
 
